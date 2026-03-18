@@ -25,6 +25,7 @@ class ItemRef:
     item_type: str
     locator: str
     preview: str
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -36,6 +37,18 @@ class SearchHit:
     locator: str
     item_type: str
     preview: str
+    document_path: Path | None = None
+    display_name: str | None = None
+
+
+@dataclass(frozen=True)
+class IndexedItem:
+    item_id: str
+    item_type: str
+    locator: str
+    preview: str
+    content_text: str
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

@@ -6,8 +6,12 @@ dist/
 wheels/
 *.egg-info
 
+# Mac artefacts
+.DS_Store
+
 # Virtual environments
 .venv
 
 # Local data
 .offagent/
+test-case/

@@ -9,6 +9,7 @@ description = "Local-first Office document tooling with a shared CLI and MCP-rea
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+  "python-docx>=1.1,<2",
   "pydantic>=2.0,<3",
   "python-dotenv>=1.0,<2",
   "typer>=0.12,<1",
