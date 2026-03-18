@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Sequence
 
-from offagent.adapters import docx_adapter
+from offagent.adapters import docx_adapter, pptx_adapter
 from offagent.config import AppConfig
 from offagent.domain.models import DocumentRef, FileType, ItemRef, SearchHit
 from offagent.indexing import store
@@ -19,12 +19,17 @@ SUPPORTED_EXTENSIONS: dict[str, FileType] = {
     ".pptx": "pptx",
     ".xlsx": "xlsx",
 }
+INDEXABLE_EXTENSIONS: dict[str, FileType] = {
+    ".docx": "docx",
+    ".pptx": "pptx",
+}
 
 REQUIRED_IMPORTS: tuple[tuple[str, str], ...] = (
     ("typer", "Typer"),
     ("pydantic", "Pydantic"),
     ("dotenv", "python-dotenv"),
     ("docx", "python-docx"),
+    ("pptx", "python-pptx"),
 )
 
 
@@ -67,12 +72,12 @@ class AppServices:
         return discover_documents(self.config.document_roots)
 
     def index_path(self, path: Path) -> IndexSummary:
-        candidates = _docx_candidates(path)
+        candidates = _index_candidates(path)
         indexed = 0
         skipped = 0
 
         for candidate in candidates:
-            if candidate.suffix.lower() != ".docx":
+            if candidate.suffix.lower() not in INDEXABLE_EXTENSIONS:
                 skipped += 1
                 continue
             self.index_document(candidate)
@@ -88,9 +93,9 @@ class AppServices:
         return self.index_path(path)
 
     def index_document(self, document_path: Path) -> DocumentRef:
-        resolved_path = _require_docx_path(document_path)
-        document_ref = _build_document_ref(resolved_path, "docx")
-        items = docx_adapter.extract_document(resolved_path)
+        resolved_path, file_type = _require_indexable_path(document_path)
+        document_ref = _build_document_ref(resolved_path, file_type)
+        items = _extract_items(resolved_path, file_type)
 
         connection = store.ensure_ready(self.config.index_path)
         try:
@@ -108,8 +113,8 @@ class AppServices:
         file_type: str | None = None,
         document_path: Path | None = None,
     ) -> list[SearchHit]:
-        if file_type not in (None, "docx"):
-            raise ValueError("Only DOCX search is supported in this feature.")
+        if file_type not in (None, "docx", "pptx"):
+            raise ValueError("Only DOCX and PPTX search are supported in this feature.")
 
         connection = store.ensure_ready(self.config.index_path)
         try:
@@ -125,37 +130,112 @@ class AppServices:
         return [_search_hit_from_row(row) for row in rows]
 
     def locate_paragraph(self, document_path: Path, paragraph_index: int) -> ItemRef:
-        item_id = f"para:{paragraph_index}"
+        return self.locate_items(document_path, paragraph_index=paragraph_index)[0]
+
+    def locate_slide_shapes(
+        self,
+        document_path: Path,
+        slide_number: int,
+        shape_id: int | None = None,
+    ) -> list[ItemRef]:
+        return self.locate_items(document_path, slide_number=slide_number, shape_id=shape_id)
+
+    def locate_items(
+        self,
+        document_path: Path,
+        *,
+        paragraph_index: int | None = None,
+        slide_number: int | None = None,
+        shape_id: int | None = None,
+    ) -> list[ItemRef]:
+        resolved_path, file_type = _require_indexable_path(document_path)
         connection = store.ensure_ready(self.config.index_path)
         try:
-            _, item_row = self._resolve_item_row(connection, document_path, item_id)
+            document_row = self._resolve_document_row(connection, resolved_path)
+            if file_type == "docx":
+                if paragraph_index is None or slide_number is not None or shape_id is not None:
+                    raise ValueError("DOCX locate requires --paragraph and does not support --slide.")
+                item_row = self._resolve_indexed_item_row(
+                    connection,
+                    document_row,
+                    f"para:{paragraph_index}",
+                    resolved_path,
+                )
+                return [_item_ref_from_row(item_row)]
+
+            if paragraph_index is not None:
+                raise ValueError("PPTX locate does not support --paragraph.")
+            if slide_number is None:
+                raise ValueError("PPTX locate requires --slide.")
+
+            item_rows = store.fetch_items_for_document(connection, document_row["document_id"])
+            matches = [
+                row
+                for row in item_rows
+                if _metadata_value(row, "slide_number") == slide_number
+                and (shape_id is None or _metadata_value(row, "shape_id") == shape_id)
+            ]
+            matches.sort(
+                key=lambda row: (
+                    _metadata_value(row, "shape_index", default=0),
+                    row["item_id"],
+                )
+            )
+            if not matches:
+                if shape_id is None:
+                    raise LookupError(
+                        f"No indexed PPTX text shapes found on slide {slide_number} for {resolved_path}"
+                    )
+                raise LookupError(
+                    f"No indexed PPTX text shape found for slide {slide_number} shape {shape_id} in {resolved_path}"
+                )
+            return [_item_ref_from_row(row) for row in matches]
         finally:
             connection.close()
-        return _item_ref_from_row(item_row)
 
     def read_item(self, document_path: Path, item_id: str) -> str:
+        resolved_path, file_type = _require_indexable_path(document_path)
         connection = store.ensure_ready(self.config.index_path)
         try:
-            self._resolve_item_row(connection, document_path, item_id)
+            document_row = self._resolve_document_row(connection, resolved_path)
+            self._resolve_indexed_item_row(connection, document_row, item_id, resolved_path)
         finally:
             connection.close()
-        return docx_adapter.read_paragraph(_require_docx_path(document_path), item_id)
+        if file_type == "docx":
+            return docx_adapter.read_paragraph(resolved_path, item_id)
+        return pptx_adapter.read_text_shape(resolved_path, item_id)
 
     def replace_item_text(self, document_path: Path, item_id: str, text: str) -> PatchResult:
+        resolved_path, file_type = _require_indexable_path(document_path)
         connection = store.ensure_ready(self.config.index_path)
         try:
-            self._resolve_item_row(connection, document_path, item_id)
+            document_row = self._resolve_document_row(connection, resolved_path)
+            try:
+                self._resolve_indexed_item_row(connection, document_row, item_id, resolved_path)
+            except LookupError:
+                if file_type == "pptx":
+                    _raise_if_pptx_target_not_editable(resolved_path, item_id)
+                raise
         finally:
             connection.close()
 
-        resolved_path = _require_docx_path(document_path)
-        output_path = docx_adapter.replace_paragraph(resolved_path, item_id, text)
+        if file_type == "docx":
+            output_path = docx_adapter.replace_paragraph(resolved_path, item_id, text)
+            updated_text = docx_adapter.read_paragraph(output_path, item_id)
+        else:
+            output_path = pptx_adapter.replace_text_shape(resolved_path, item_id, text)
+            updated_text = pptx_adapter.read_text_shape(output_path, item_id)
         self.index_document(output_path)
-        updated_text = docx_adapter.read_paragraph(output_path, item_id)
 
         connection = store.ensure_ready(self.config.index_path)
         try:
-            _, updated_item_row = self._resolve_item_row(connection, output_path, item_id)
+            document_row = self._resolve_document_row(connection, output_path.resolve())
+            updated_item_row = self._resolve_indexed_item_row(
+                connection,
+                document_row,
+                item_id,
+                output_path.resolve(),
+            )
         finally:
             connection.close()
 
@@ -167,20 +247,36 @@ class AppServices:
         )
 
     def append_item_text(self, document_path: Path, item_id: str, text: str) -> PatchResult:
+        resolved_path, file_type = _require_indexable_path(document_path)
         connection = store.ensure_ready(self.config.index_path)
         try:
-            self._resolve_item_row(connection, document_path, item_id)
+            document_row = self._resolve_document_row(connection, resolved_path)
+            try:
+                self._resolve_indexed_item_row(connection, document_row, item_id, resolved_path)
+            except LookupError:
+                if file_type == "pptx":
+                    _raise_if_pptx_target_not_editable(resolved_path, item_id)
+                raise
         finally:
             connection.close()
 
-        resolved_path = _require_docx_path(document_path)
-        output_path = docx_adapter.append_paragraph(resolved_path, item_id, text)
+        if file_type == "docx":
+            output_path = docx_adapter.append_paragraph(resolved_path, item_id, text)
+            updated_text = docx_adapter.read_paragraph(output_path, item_id)
+        else:
+            output_path = pptx_adapter.append_text_shape(resolved_path, item_id, text)
+            updated_text = pptx_adapter.read_text_shape(output_path, item_id)
         self.index_document(output_path)
-        updated_text = docx_adapter.read_paragraph(output_path, item_id)
 
         connection = store.ensure_ready(self.config.index_path)
         try:
-            _, updated_item_row = self._resolve_item_row(connection, output_path, item_id)
+            document_row = self._resolve_document_row(connection, output_path.resolve())
+            updated_item_row = self._resolve_indexed_item_row(
+                connection,
+                document_row,
+                item_id,
+                output_path.resolve(),
+            )
         finally:
             connection.close()
 
@@ -213,15 +309,32 @@ class AppServices:
         document_path: Path,
         item_id: str,
     ) -> tuple[sqlite3.Row, sqlite3.Row]:
-        document_row = store.fetch_document_by_path(connection, _require_docx_path(document_path))
+        resolved_path, _ = _require_indexable_path(document_path)
+        document_row = self._resolve_document_row(connection, resolved_path)
+        item_row = self._resolve_indexed_item_row(connection, document_row, item_id, resolved_path)
+        return document_row, item_row
+
+    def _resolve_document_row(
+        self,
+        connection: sqlite3.Connection,
+        document_path: Path,
+    ) -> sqlite3.Row:
+        document_row = store.fetch_document_by_path(connection, document_path)
         if document_row is None:
             raise LookupError(f"Document is not indexed: {document_path}")
+        return document_row
 
+    def _resolve_indexed_item_row(
+        self,
+        connection: sqlite3.Connection,
+        document_row: sqlite3.Row,
+        item_id: str,
+        document_path: Path,
+    ) -> sqlite3.Row:
         item_row = store.fetch_item_by_id(connection, document_row["document_id"], item_id)
         if item_row is None:
             raise LookupError(f"Item {item_id} is not indexed for {document_path}")
-
-        return document_row, item_row
+        return item_row
 
 
 def discover_documents(roots: Iterable[Path]) -> list[DocumentRef]:
@@ -270,27 +383,36 @@ def _build_document_ref(path: Path, file_type: FileType) -> DocumentRef:
     )
 
 
-def _docx_candidates(path: Path) -> list[Path]:
+def _index_candidates(path: Path) -> list[Path]:
     resolved = path.resolve()
     if resolved.is_dir():
         return sorted(
             [
                 candidate
                 for candidate in resolved.rglob("*")
-                if candidate.is_file() and candidate.suffix.lower() == ".docx"
+                if candidate.is_file() and candidate.suffix.lower() in SUPPORTED_EXTENSIONS
             ],
             key=lambda candidate: str(candidate),
         )
     return [resolved]
 
 
-def _require_docx_path(path: Path) -> Path:
+def _require_indexable_path(path: Path) -> tuple[Path, FileType]:
     resolved = path.resolve()
-    if resolved.suffix.lower() != ".docx":
-        raise ValueError(f"DOCX operations require a .docx path: {path}")
+    file_type = INDEXABLE_EXTENSIONS.get(resolved.suffix.lower())
+    if file_type is None:
+        raise ValueError(f"Implemented operations require a .docx or .pptx path: {path}")
     if not resolved.exists():
         raise FileNotFoundError(resolved)
-    return resolved
+    return resolved, file_type
+
+
+def _extract_items(document_path: Path, file_type: FileType):
+    if file_type == "docx":
+        return docx_adapter.extract_document(document_path)
+    if file_type == "pptx":
+        return pptx_adapter.extract_document(document_path)
+    raise ValueError(f"Unsupported indexable file type: {file_type}")
 
 
 def _search_hit_from_row(row: sqlite3.Row) -> SearchHit:
@@ -316,6 +438,20 @@ def _item_ref_from_row(row: sqlite3.Row) -> ItemRef:
         preview=row["preview"],
         metadata=json.loads(row["metadata_json"]),
     )
+
+
+def _metadata_value(row: sqlite3.Row, key: str, *, default=None):
+    metadata = json.loads(row["metadata_json"])
+    return metadata.get(key, default)
+
+
+def _raise_if_pptx_target_not_editable(document_path: Path, item_id: str) -> None:
+    try:
+        pptx_adapter.resolve_shape(document_path, item_id)
+    except pptx_adapter.TargetNotEditableError:
+        raise
+    except (LookupError, ValueError):
+        return
 
 
 def _check_import(module_name: str, label: str) -> DoctorCheck:

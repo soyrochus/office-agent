@@ -91,11 +91,19 @@ def build_app():
     @app.command()
     def locate(
         doc: Annotated[Path, typer.Option("--doc")],
-        paragraph: Annotated[int, typer.Option("--paragraph")],
+        paragraph: Annotated[int | None, typer.Option("--paragraph")] = None,
+        slide: Annotated[int | None, typer.Option("--slide")] = None,
+        shape: Annotated[int | None, typer.Option("--shape")] = None,
         config: Annotated[Path | None, CONFIG_OPTION] = None,
     ) -> None:
         services = AppServices(load_config(config))
-        _run_command(lambda: _echo_item(services.locate_paragraph(doc, paragraph)))
+
+        def runner() -> None:
+            items = services.locate_items(doc, paragraph_index=paragraph, slide_number=slide, shape_id=shape)
+            for item in items:
+                _echo_item(item)
+
+        _run_command(runner)
 
     @app.command()
     def read(

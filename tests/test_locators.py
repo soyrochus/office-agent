@@ -16,3 +16,10 @@ def test_parse_search_locator() -> None:
     assert result.locator_type == "search"
     assert result.target_hint is None
     assert not result.resolved
+
+
+def test_parse_pptx_shape_item_id_as_direct_locator() -> None:
+    result = parse_locator("slide:2:shape:17")
+    assert result.locator_type == "direct"
+    assert result.target_hint == "shape"
+    assert result.tokens == ("slide:2:shape:17",)

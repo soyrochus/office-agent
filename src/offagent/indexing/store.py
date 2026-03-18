@@ -200,6 +200,23 @@ def fetch_item_by_id(
     ).fetchone()
 
 
+def fetch_items_for_document(
+    connection: sqlite3.Connection,
+    document_id: str,
+) -> list[sqlite3.Row]:
+    return list(
+        connection.execute(
+            """
+            SELECT *
+            FROM items
+            WHERE document_id = ?
+            ORDER BY item_id
+            """,
+            (document_id,),
+        ).fetchall()
+    )
+
+
 def search_items(
     connection: sqlite3.Connection,
     query: str,
