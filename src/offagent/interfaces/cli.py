@@ -94,12 +94,21 @@ def build_app():
         paragraph: Annotated[int | None, typer.Option("--paragraph")] = None,
         slide: Annotated[int | None, typer.Option("--slide")] = None,
         shape: Annotated[int | None, typer.Option("--shape")] = None,
+        sheet: Annotated[str | None, typer.Option("--sheet")] = None,
+        cell: Annotated[str | None, typer.Option("--cell")] = None,
         config: Annotated[Path | None, CONFIG_OPTION] = None,
     ) -> None:
         services = AppServices(load_config(config))
 
         def runner() -> None:
-            items = services.locate_items(doc, paragraph_index=paragraph, slide_number=slide, shape_id=shape)
+            items = services.locate_items(
+                doc,
+                paragraph_index=paragraph,
+                slide_number=slide,
+                shape_id=shape,
+                sheet_name=sheet,
+                cell_coordinate=cell,
+            )
             for item in items:
                 _echo_item(item)
 
@@ -133,6 +142,17 @@ def build_app():
     ) -> None:
         services = AppServices(load_config(config))
         _run_command(lambda: _echo_patch_result(services.append_item_text(doc, item, text)))
+
+    @app.command("write-cell")
+    def write_cell(
+        doc: Annotated[Path, typer.Option("--doc")],
+        sheet: Annotated[str, typer.Option("--sheet")],
+        cell: Annotated[str, typer.Option("--cell")],
+        value: Annotated[str, typer.Option("--value")],
+        config: Annotated[Path | None, CONFIG_OPTION] = None,
+    ) -> None:
+        services = AppServices(load_config(config))
+        _run_command(lambda: _echo_patch_result(services.write_cell_value(doc, sheet, cell, value)))
 
     return app
 

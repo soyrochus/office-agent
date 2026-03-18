@@ -5,7 +5,7 @@ from typing import Literal
 
 LocatorType = Literal["direct", "search"]
 
-DIRECT_PREFIXES = ("paragraph ", "slide ", "sheet ", "para:", "slide:")
+DIRECT_PREFIXES = ("paragraph ", "slide ", "sheet ", "para:", "slide:", "sheet:")
 
 
 @dataclass(frozen=True)
@@ -42,6 +42,8 @@ def _infer_target_hint(lowered: str) -> str | None:
         return "paragraph"
     if lowered.startswith("slide:") and ":shape:" in lowered:
         return "shape"
+    if lowered.startswith("sheet:") and "!" in lowered:
+        return "cell"
     if lowered.startswith("slide "):
         return "slide"
     if lowered.startswith("sheet "):

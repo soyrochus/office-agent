@@ -15,8 +15,10 @@ The project is being built incrementally. The current implementation includes:
 - DOCX search, locate, read, replace, and append operations
 - PPTX text-shape extraction and indexing
 - PPTX search, locate, read, replace, and append operations
+- XLSX cell extraction and indexing
+- XLSX search, locate, read, write-cell, and guarded append operations
 
-Current scope is intentionally narrow. DOCX and PPTX are the currently implemented document formats. XLSX, MCP integration, and versioned write outputs are not implemented yet.
+Current scope is intentionally narrow. DOCX, PPTX, and XLSX are the currently implemented document formats. MCP integration and versioned write outputs are not implemented yet.
 
 ## Current Features
 
@@ -48,6 +50,18 @@ DOCX indexing uses paragraph-level item ids in the form `para:<n>`. Empty paragr
 - append text to an existing editable text frame
 
 PPTX indexing uses shape-level item ids in the form `slide:<n>:shape:<id>`. Only shapes with text frames are indexed. Tables, charts, images, SmartArt, and other non-text shapes are excluded, and PPTX write attempts to those targets fail with `target not editable`.
+
+### XLSX Workflow
+
+- index an `.xlsx` file or a directory of supported Office files
+- reindex a changed `.xlsx` file
+- search indexed workbook cell content through SQLite FTS5
+- locate a cell directly by worksheet name and coordinate
+- read the current cell value or formula text from the source workbook
+- write one cell value directly with `write-cell`
+- append text only to empty or string-compatible cells
+
+XLSX indexing uses cell-level item ids in the form `sheet:<name>!<coordinate>`. Only non-empty cells are indexed. Formula cells are indexed by formula text, and append attempts to numeric or formula cells fail with an error directing the user to `write-cell`.
 
 ## Installation
 
@@ -98,8 +112,10 @@ uv run office-agent doctor --config office-agent.toml
 uv run office-agent index ./docs
 uv run office-agent index ./docs/sample.docx
 uv run office-agent index ./docs/sample.pptx
+uv run office-agent index ./docs/sample.xlsx
 uv run office-agent reindex ./docs/sample.docx
 uv run office-agent reindex ./docs/sample.pptx
+uv run office-agent reindex ./docs/sample.xlsx
 ```
 
 ### Search
@@ -108,8 +124,10 @@ uv run office-agent reindex ./docs/sample.pptx
 uv run office-agent search "supplier shall"
 uv run office-agent search "supplier shall" --type docx
 uv run office-agent search "supplier shall" --type pptx
+uv run office-agent search "supplier shall" --type xlsx
 uv run office-agent search "supplier shall" --type docx --doc ./docs/sample.docx
 uv run office-agent search "supplier shall" --type pptx --doc ./docs/sample.pptx
+uv run office-agent search "supplier shall" --type xlsx --doc ./docs/sample.xlsx
 ```
 
 The current implementation returns item hits with item id, score, and preview text.
@@ -120,6 +138,7 @@ The current implementation returns item hits with item id, score, and preview te
 uv run office-agent locate --doc ./docs/sample.docx --paragraph 3
 uv run office-agent locate --doc ./docs/sample.pptx --slide 1
 uv run office-agent locate --doc ./docs/sample.pptx --slide 1 --shape 7
+uv run office-agent locate --doc ./docs/sample.xlsx --sheet Budget2026 --cell B12
 ```
 
 ### Read
@@ -127,6 +146,7 @@ uv run office-agent locate --doc ./docs/sample.pptx --slide 1 --shape 7
 ```bash
 uv run office-agent read --doc ./docs/sample.docx --item para:3
 uv run office-agent read --doc ./docs/sample.pptx --item slide:1:shape:7
+uv run office-agent read --doc ./docs/sample.xlsx --item sheet:Budget2026!B12
 ```
 
 ### Replace
@@ -141,9 +161,16 @@ uv run office-agent replace --doc ./docs/sample.pptx --item slide:1:shape:7 --te
 ```bash
 uv run office-agent append --doc ./docs/sample.docx --item para:3 --text " Additional text."
 uv run office-agent append --doc ./docs/sample.pptx --item slide:1:shape:7 --text "\nAdditional slide text."
+uv run office-agent append --doc ./docs/sample.xlsx --item sheet:Notes!A1 --text " Additional note."
 ```
 
-At the moment, DOCX and PPTX `replace` and `append` write in place and then reindex the updated file.
+### Write Cell
+
+```bash
+uv run office-agent write-cell --doc ./docs/sample.xlsx --sheet Budget2026 --cell B12 --value "125000"
+```
+
+At the moment, DOCX and PPTX `replace` and `append`, plus XLSX `write-cell` and `append`, write in place and then reindex the updated file.
 
 ## Development
 
@@ -161,7 +188,9 @@ The test suite is written in `pytest` and includes:
 - DOCX service workflow tests
 - PPTX adapter tests
 - PPTX service workflow tests
-- CLI round-trip tests for DOCX and PPTX
+- XLSX adapter tests
+- XLSX service workflow tests
+- CLI round-trip tests for DOCX, PPTX, and XLSX
 
 ## Project Status
 
@@ -172,13 +201,13 @@ Implemented:
 - SQLite index bootstrap and FTS5-backed search
 - DOCX paragraph extraction and editing workflow
 - PPTX text-shape extraction and editing workflow
+- XLSX cell extraction and editing workflow
 
 Not implemented yet:
 
-- XLSX support
 - MCP interface
 - versioned output paths for write operations
-- richer locator resolution beyond the current DOCX and PPTX flows
+- richer locator resolution beyond the current direct DOCX, PPTX, and XLSX flows
 
 
 ## Principles of Participation

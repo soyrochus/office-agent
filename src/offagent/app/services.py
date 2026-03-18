@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Sequence
 
-from offagent.adapters import docx_adapter, pptx_adapter
+from offagent.adapters import docx_adapter, pptx_adapter, xlsx_adapter
 from offagent.config import AppConfig
 from offagent.domain.models import DocumentRef, FileType, ItemRef, SearchHit
 from offagent.indexing import store
@@ -22,6 +22,7 @@ SUPPORTED_EXTENSIONS: dict[str, FileType] = {
 INDEXABLE_EXTENSIONS: dict[str, FileType] = {
     ".docx": "docx",
     ".pptx": "pptx",
+    ".xlsx": "xlsx",
 }
 
 REQUIRED_IMPORTS: tuple[tuple[str, str], ...] = (
@@ -30,6 +31,7 @@ REQUIRED_IMPORTS: tuple[tuple[str, str], ...] = (
     ("dotenv", "python-dotenv"),
     ("docx", "python-docx"),
     ("pptx", "python-pptx"),
+    ("openpyxl", "openpyxl"),
 )
 
 
@@ -113,8 +115,8 @@ class AppServices:
         file_type: str | None = None,
         document_path: Path | None = None,
     ) -> list[SearchHit]:
-        if file_type not in (None, "docx", "pptx"):
-            raise ValueError("Only DOCX and PPTX search are supported in this feature.")
+        if file_type not in (None, "docx", "pptx", "xlsx"):
+            raise ValueError("Only DOCX, PPTX, and XLSX search are supported in this feature.")
 
         connection = store.ensure_ready(self.config.index_path)
         try:
@@ -140,6 +142,9 @@ class AppServices:
     ) -> list[ItemRef]:
         return self.locate_items(document_path, slide_number=slide_number, shape_id=shape_id)
 
+    def locate_cell(self, document_path: Path, sheet_name: str, cell_coordinate: str) -> ItemRef:
+        return self.locate_items(document_path, sheet_name=sheet_name, cell_coordinate=cell_coordinate)[0]
+
     def locate_items(
         self,
         document_path: Path,
@@ -147,13 +152,21 @@ class AppServices:
         paragraph_index: int | None = None,
         slide_number: int | None = None,
         shape_id: int | None = None,
+        sheet_name: str | None = None,
+        cell_coordinate: str | None = None,
     ) -> list[ItemRef]:
         resolved_path, file_type = _require_indexable_path(document_path)
         connection = store.ensure_ready(self.config.index_path)
         try:
             document_row = self._resolve_document_row(connection, resolved_path)
             if file_type == "docx":
-                if paragraph_index is None or slide_number is not None or shape_id is not None:
+                if (
+                    paragraph_index is None
+                    or slide_number is not None
+                    or shape_id is not None
+                    or sheet_name is not None
+                    or cell_coordinate is not None
+                ):
                     raise ValueError("DOCX locate requires --paragraph and does not support --slide.")
                 item_row = self._resolve_indexed_item_row(
                     connection,
@@ -163,33 +176,47 @@ class AppServices:
                 )
                 return [_item_ref_from_row(item_row)]
 
-            if paragraph_index is not None:
-                raise ValueError("PPTX locate does not support --paragraph.")
-            if slide_number is None:
-                raise ValueError("PPTX locate requires --slide.")
+            if file_type == "pptx":
+                if paragraph_index is not None or sheet_name is not None or cell_coordinate is not None:
+                    raise ValueError("PPTX locate supports --slide and optional --shape only.")
+                if slide_number is None:
+                    raise ValueError("PPTX locate requires --slide.")
 
-            item_rows = store.fetch_items_for_document(connection, document_row["document_id"])
-            matches = [
-                row
-                for row in item_rows
-                if _metadata_value(row, "slide_number") == slide_number
-                and (shape_id is None or _metadata_value(row, "shape_id") == shape_id)
-            ]
-            matches.sort(
-                key=lambda row: (
-                    _metadata_value(row, "shape_index", default=0),
-                    row["item_id"],
-                )
-            )
-            if not matches:
-                if shape_id is None:
-                    raise LookupError(
-                        f"No indexed PPTX text shapes found on slide {slide_number} for {resolved_path}"
+                item_rows = store.fetch_items_for_document(connection, document_row["document_id"])
+                matches = [
+                    row
+                    for row in item_rows
+                    if _metadata_value(row, "slide_number") == slide_number
+                    and (shape_id is None or _metadata_value(row, "shape_id") == shape_id)
+                ]
+                matches.sort(
+                    key=lambda row: (
+                        _metadata_value(row, "shape_index", default=0),
+                        row["item_id"],
                     )
-                raise LookupError(
-                    f"No indexed PPTX text shape found for slide {slide_number} shape {shape_id} in {resolved_path}"
                 )
-            return [_item_ref_from_row(row) for row in matches]
+                if not matches:
+                    if shape_id is None:
+                        raise LookupError(
+                            f"No indexed PPTX text shapes found on slide {slide_number} for {resolved_path}"
+                        )
+                    raise LookupError(
+                        f"No indexed PPTX text shape found for slide {slide_number} shape {shape_id} in {resolved_path}"
+                    )
+                return [_item_ref_from_row(row) for row in matches]
+
+            if paragraph_index is not None or slide_number is not None or shape_id is not None:
+                raise ValueError("XLSX locate supports --sheet and --cell only.")
+            if sheet_name is None or cell_coordinate is None:
+                raise ValueError("XLSX locate requires --sheet and --cell.")
+
+            item_row = self._resolve_indexed_item_row(
+                connection,
+                document_row,
+                xlsx_adapter.make_item_id(sheet_name, cell_coordinate),
+                resolved_path,
+            )
+            return [_item_ref_from_row(item_row)]
         finally:
             connection.close()
 
@@ -203,10 +230,15 @@ class AppServices:
             connection.close()
         if file_type == "docx":
             return docx_adapter.read_paragraph(resolved_path, item_id)
-        return pptx_adapter.read_text_shape(resolved_path, item_id)
+        if file_type == "pptx":
+            return pptx_adapter.read_text_shape(resolved_path, item_id)
+        return xlsx_adapter.read_cell(resolved_path, item_id)
 
     def replace_item_text(self, document_path: Path, item_id: str, text: str) -> PatchResult:
         resolved_path, file_type = _require_indexable_path(document_path)
+        if file_type == "xlsx":
+            raise ValueError("XLSX replace is not supported; use write-cell.")
+
         connection = store.ensure_ready(self.config.index_path)
         try:
             document_row = self._resolve_document_row(connection, resolved_path)
@@ -248,24 +280,63 @@ class AppServices:
 
     def append_item_text(self, document_path: Path, item_id: str, text: str) -> PatchResult:
         resolved_path, file_type = _require_indexable_path(document_path)
-        connection = store.ensure_ready(self.config.index_path)
-        try:
-            document_row = self._resolve_document_row(connection, resolved_path)
+        if file_type != "xlsx":
+            connection = store.ensure_ready(self.config.index_path)
             try:
-                self._resolve_indexed_item_row(connection, document_row, item_id, resolved_path)
-            except LookupError:
-                if file_type == "pptx":
-                    _raise_if_pptx_target_not_editable(resolved_path, item_id)
-                raise
-        finally:
-            connection.close()
+                document_row = self._resolve_document_row(connection, resolved_path)
+                try:
+                    self._resolve_indexed_item_row(connection, document_row, item_id, resolved_path)
+                except LookupError:
+                    if file_type == "pptx":
+                        _raise_if_pptx_target_not_editable(resolved_path, item_id)
+                    raise
+            finally:
+                connection.close()
 
         if file_type == "docx":
             output_path = docx_adapter.append_paragraph(resolved_path, item_id, text)
             updated_text = docx_adapter.read_paragraph(output_path, item_id)
-        else:
+        elif file_type == "pptx":
             output_path = pptx_adapter.append_text_shape(resolved_path, item_id, text)
             updated_text = pptx_adapter.read_text_shape(output_path, item_id)
+        else:
+            output_path = xlsx_adapter.append_cell(resolved_path, item_id, text)
+            updated_text = xlsx_adapter.read_cell(output_path, item_id)
+        self.index_document(output_path)
+
+        connection = store.ensure_ready(self.config.index_path)
+        try:
+            document_row = self._resolve_document_row(connection, output_path.resolve())
+            updated_item_row = self._resolve_indexed_item_row(
+                connection,
+                document_row,
+                item_id,
+                output_path.resolve(),
+            )
+        finally:
+            connection.close()
+
+        return PatchResult(
+            document_path=resolved_path,
+            output_path=output_path,
+            item=_item_ref_from_row(updated_item_row),
+            text=updated_text,
+        )
+
+    def write_cell_value(
+        self,
+        document_path: Path,
+        sheet_name: str,
+        cell_coordinate: str,
+        value: str,
+    ) -> PatchResult:
+        resolved_path, file_type = _require_indexable_path(document_path)
+        if file_type != "xlsx":
+            raise ValueError("write-cell requires an .xlsx path.")
+
+        item_id = xlsx_adapter.make_item_id(sheet_name, cell_coordinate)
+        output_path = xlsx_adapter.write_cell(resolved_path, item_id, value)
+        updated_text = xlsx_adapter.read_cell(output_path, item_id)
         self.index_document(output_path)
 
         connection = store.ensure_ready(self.config.index_path)
@@ -401,7 +472,7 @@ def _require_indexable_path(path: Path) -> tuple[Path, FileType]:
     resolved = path.resolve()
     file_type = INDEXABLE_EXTENSIONS.get(resolved.suffix.lower())
     if file_type is None:
-        raise ValueError(f"Implemented operations require a .docx or .pptx path: {path}")
+        raise ValueError(f"Implemented operations require a .docx, .pptx, or .xlsx path: {path}")
     if not resolved.exists():
         raise FileNotFoundError(resolved)
     return resolved, file_type
@@ -412,6 +483,8 @@ def _extract_items(document_path: Path, file_type: FileType):
         return docx_adapter.extract_document(document_path)
     if file_type == "pptx":
         return pptx_adapter.extract_document(document_path)
+    if file_type == "xlsx":
+        return xlsx_adapter.extract_document(document_path)
     raise ValueError(f"Unsupported indexable file type: {file_type}")
 
 

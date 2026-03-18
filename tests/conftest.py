@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 from docx import Document
+from openpyxl import Workbook
 from pptx import Presentation
 from pptx.util import Inches
 
@@ -62,4 +63,23 @@ def sample_pptx(tmp_path) -> Path:
     editable_box.text = "Editable speaker notes"
 
     presentation.save(path)
+    return path
+
+
+@pytest.fixture
+def sample_xlsx(tmp_path) -> Path:
+    path = tmp_path / "sample.xlsx"
+    workbook = Workbook()
+
+    budget_sheet = workbook.active
+    budget_sheet.title = "Budget2026"
+    budget_sheet["A1"] = "Quarterly Budget"
+    budget_sheet["B2"] = 125000
+    budget_sheet["C3"] = "=SUM(1,2)"
+
+    notes_sheet = workbook.create_sheet("Notes 2026")
+    notes_sheet["A1"] = "Supplier shall review variance."
+    notes_sheet["A2"] = "Follow up with finance."
+
+    workbook.save(path)
     return path

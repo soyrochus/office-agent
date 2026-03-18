@@ -23,3 +23,10 @@ def test_parse_pptx_shape_item_id_as_direct_locator() -> None:
     assert result.locator_type == "direct"
     assert result.target_hint == "shape"
     assert result.tokens == ("slide:2:shape:17",)
+
+
+def test_parse_xlsx_cell_item_id_as_direct_locator() -> None:
+    result = parse_locator("sheet:Budget2026!B12")
+    assert result.locator_type == "direct"
+    assert result.target_hint == "cell"
+    assert result.tokens == ("sheet:Budget2026", "B12")
