@@ -352,6 +352,8 @@ The `doctor` command validates the runtime environment:
 
 ## 15. Testing Strategy
 
+All tests are written with **pytest**. No other test framework is permitted. Use `pytest` for unit tests, adapter tests, CLI tests, and MCP integration tests. Test discovery follows standard pytest conventions (`tests/` directory, files named `test_*.py`).
+
 ### Fixture corpus (`tests/fixtures/`)
 
 Three files, version-controlled, never regenerated between runs:
@@ -365,7 +367,7 @@ Three files, version-controlled, never regenerated between runs:
 |-------|-------|
 | Unit | Locator parsing, version path generation, content hash comparison, stale locator detection, patch request validation |
 | Adapter | Extract fixture → verify item count → resolve known item → patch known item → reopen output → verify content. One suite per format. |
-| CLI | All command groups against fixture corpus; exit code assertions for every defined failure mode |
+| CLI | All command groups against fixture corpus; exit code assertions for every defined failure mode. Use `typer.testing.CliRunner` invoked from pytest. |
 | MCP | Start server as subprocess; invoke each tool; validate schema and result structure; full round-trip cycle |
 
 CLI tests are part of the primary test harness. The CLI must be testable without mocking the service layer.
