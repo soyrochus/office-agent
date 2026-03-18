@@ -34,17 +34,27 @@ def test_replace_append_and_reindex_pptx(sample_pptx, tmp_path) -> None:
     editable_item = services.locate_slide_shapes(sample_pptx, 2)[0]
 
     replace_result = services.replace_item_text(sample_pptx, editable_item.item_id, "Updated speaker notes.")
-    append_result = services.append_item_text(sample_pptx, editable_item.item_id, "\nAdd follow-up action.")
+    append_result = services.append_item_text(
+        replace_result.output_path,
+        editable_item.item_id,
+        "\nAdd follow-up action.",
+    )
 
-    presentation = Presentation(str(sample_pptx))
-    editable_shape = next(shape for shape in presentation.slides[1].shapes if shape.has_text_frame)
+    original_presentation = Presentation(str(sample_pptx))
+    final_presentation = Presentation(str(append_result.output_path))
+    original_shape = next(shape for shape in original_presentation.slides[1].shapes if shape.has_text_frame)
+    editable_shape = next(shape for shape in final_presentation.slides[1].shapes if shape.has_text_frame)
 
     assert replace_result.text == "Updated speaker notes."
     assert append_result.text == "Updated speaker notes.\nAdd follow-up action."
+    assert replace_result.output_path != sample_pptx
+    assert ".edited." in replace_result.output_path.name
+    assert original_shape.text_frame.text == "Editable speaker notes"
     assert editable_shape.text_frame.text == "Updated speaker notes.\nAdd follow-up action."
 
     hits = services.search_corpus("follow up action", file_type="pptx")
     assert hits[0].item_id == editable_item.item_id
+    assert hits[0].document_path == append_result.output_path
 
 
 def test_replace_rejects_non_text_pptx_target(sample_pptx, tmp_path) -> None:

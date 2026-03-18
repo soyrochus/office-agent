@@ -12,6 +12,8 @@ def test_loads_file_and_environment_overrides(tmp_path) -> None:
 [offagent]
 index_path = "from-file/index.sqlite3"
 document_roots = ["docs", "shared"]
+output_directory = "from-file/edited"
+allow_inplace_overwrite = false
 """.strip()
     )
 
@@ -21,12 +23,16 @@ document_roots = ["docs", "shared"]
         "OFFAGENT_DOCUMENT_ROOTS": os.pathsep.join(
             [str(tmp_path / "env-docs"), str(tmp_path / "env-shared")]
         ),
+        "OFFAGENT_OUTPUT_DIRECTORY": str(tmp_path / "from-env" / "edited"),
+        "OFFAGENT_ALLOW_INPLACE_OVERWRITE": "true",
     }
 
     config = load_config(env=env)
 
     assert config.index_path == tmp_path / "from-env" / "index.sqlite3"
     assert config.document_roots == (tmp_path / "env-docs", tmp_path / "env-shared")
+    assert config.output_directory == tmp_path / "from-env" / "edited"
+    assert config.allow_inplace_overwrite is True
     assert config.config_path == config_path
 
 
@@ -34,3 +40,5 @@ def test_uses_defaults_when_no_config_is_present() -> None:
     config = load_config(env={})
     assert config.document_roots == ()
     assert str(config.index_path).endswith(".offagent/index.sqlite3")
+    assert config.output_directory is None
+    assert config.allow_inplace_overwrite is False

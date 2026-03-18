@@ -7,12 +7,13 @@ import os
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Iterable, Literal, Sequence
 
 from offagent.adapters import docx_adapter, pptx_adapter, xlsx_adapter
 from offagent.config import AppConfig
 from offagent.domain.models import DocumentRef, FileType, ItemRef, SearchHit
 from offagent.indexing import store
+from offagent.storage import versioning
 
 SUPPORTED_EXTENSIONS: dict[str, FileType] = {
     ".docx": "docx",
@@ -33,6 +34,8 @@ REQUIRED_IMPORTS: tuple[tuple[str, str], ...] = (
     ("pptx", "python-pptx"),
     ("openpyxl", "openpyxl"),
 )
+
+OutputMode = Literal["versioned", "inplace"]
 
 
 @dataclass(frozen=True)
@@ -64,6 +67,10 @@ class PatchResult:
     output_path: Path
     item: ItemRef
     text: str
+
+
+class StaleLocatorError(RuntimeError):
+    """Raised when a previously indexed target no longer resolves safely."""
 
 
 @dataclass
@@ -234,28 +241,31 @@ class AppServices:
             return pptx_adapter.read_text_shape(resolved_path, item_id)
         return xlsx_adapter.read_cell(resolved_path, item_id)
 
-    def replace_item_text(self, document_path: Path, item_id: str, text: str) -> PatchResult:
+    def replace_item_text(
+        self,
+        document_path: Path,
+        item_id: str,
+        text: str,
+        *,
+        output_mode: OutputMode = "versioned",
+    ) -> PatchResult:
         resolved_path, file_type = _require_indexable_path(document_path)
         if file_type == "xlsx":
             raise ValueError("XLSX replace is not supported; use write-cell.")
 
-        connection = store.ensure_ready(self.config.index_path)
-        try:
-            document_row = self._resolve_document_row(connection, resolved_path)
-            try:
-                self._resolve_indexed_item_row(connection, document_row, item_id, resolved_path)
-            except LookupError:
-                if file_type == "pptx":
-                    _raise_if_pptx_target_not_editable(resolved_path, item_id)
-                raise
-        finally:
-            connection.close()
+        self._prepare_write_target(
+            resolved_path,
+            file_type,
+            item_id,
+            require_indexed_item=True,
+        )
+        output_path = self._resolve_write_output_path(resolved_path, output_mode=output_mode)
 
         if file_type == "docx":
-            output_path = docx_adapter.replace_paragraph(resolved_path, item_id, text)
+            output_path = docx_adapter.replace_paragraph(resolved_path, item_id, text, output_path)
             updated_text = docx_adapter.read_paragraph(output_path, item_id)
         else:
-            output_path = pptx_adapter.replace_text_shape(resolved_path, item_id, text)
+            output_path = pptx_adapter.replace_text_shape(resolved_path, item_id, text, output_path)
             updated_text = pptx_adapter.read_text_shape(output_path, item_id)
         self.index_document(output_path)
 
@@ -278,29 +288,31 @@ class AppServices:
             text=updated_text,
         )
 
-    def append_item_text(self, document_path: Path, item_id: str, text: str) -> PatchResult:
+    def append_item_text(
+        self,
+        document_path: Path,
+        item_id: str,
+        text: str,
+        *,
+        output_mode: OutputMode = "versioned",
+    ) -> PatchResult:
         resolved_path, file_type = _require_indexable_path(document_path)
-        if file_type != "xlsx":
-            connection = store.ensure_ready(self.config.index_path)
-            try:
-                document_row = self._resolve_document_row(connection, resolved_path)
-                try:
-                    self._resolve_indexed_item_row(connection, document_row, item_id, resolved_path)
-                except LookupError:
-                    if file_type == "pptx":
-                        _raise_if_pptx_target_not_editable(resolved_path, item_id)
-                    raise
-            finally:
-                connection.close()
+        self._prepare_write_target(
+            resolved_path,
+            file_type,
+            item_id,
+            require_indexed_item=file_type != "xlsx",
+        )
+        output_path = self._resolve_write_output_path(resolved_path, output_mode=output_mode)
 
         if file_type == "docx":
-            output_path = docx_adapter.append_paragraph(resolved_path, item_id, text)
+            output_path = docx_adapter.append_paragraph(resolved_path, item_id, text, output_path)
             updated_text = docx_adapter.read_paragraph(output_path, item_id)
         elif file_type == "pptx":
-            output_path = pptx_adapter.append_text_shape(resolved_path, item_id, text)
+            output_path = pptx_adapter.append_text_shape(resolved_path, item_id, text, output_path)
             updated_text = pptx_adapter.read_text_shape(output_path, item_id)
         else:
-            output_path = xlsx_adapter.append_cell(resolved_path, item_id, text)
+            output_path = xlsx_adapter.append_cell(resolved_path, item_id, text, output_path)
             updated_text = xlsx_adapter.read_cell(output_path, item_id)
         self.index_document(output_path)
 
@@ -329,13 +341,22 @@ class AppServices:
         sheet_name: str,
         cell_coordinate: str,
         value: str,
+        *,
+        output_mode: OutputMode = "versioned",
     ) -> PatchResult:
         resolved_path, file_type = _require_indexable_path(document_path)
         if file_type != "xlsx":
             raise ValueError("write-cell requires an .xlsx path.")
 
         item_id = xlsx_adapter.make_item_id(sheet_name, cell_coordinate)
-        output_path = xlsx_adapter.write_cell(resolved_path, item_id, value)
+        self._prepare_write_target(
+            resolved_path,
+            file_type,
+            item_id,
+            require_indexed_item=False,
+        )
+        output_path = self._resolve_write_output_path(resolved_path, output_mode=output_mode)
+        output_path = xlsx_adapter.write_cell(resolved_path, item_id, value, output_path)
         updated_text = xlsx_adapter.read_cell(output_path, item_id)
         self.index_document(output_path)
 
@@ -356,6 +377,54 @@ class AppServices:
             output_path=output_path,
             item=_item_ref_from_row(updated_item_row),
             text=updated_text,
+        )
+
+    def _prepare_write_target(
+        self,
+        document_path: Path,
+        file_type: FileType,
+        item_id: str,
+        *,
+        require_indexed_item: bool,
+    ) -> None:
+        connection = store.ensure_ready(self.config.index_path)
+        try:
+            document_row = self._resolve_document_row(connection, document_path)
+            if require_indexed_item:
+                try:
+                    self._resolve_indexed_item_row(connection, document_row, item_id, document_path)
+                except LookupError:
+                    if file_type == "pptx":
+                        _raise_if_pptx_target_not_editable(document_path, item_id)
+                    raise
+
+            if document_row["content_hash"] != _content_hash(document_path):
+                try:
+                    _ensure_current_target_resolves(document_path, file_type, item_id)
+                except (LookupError, ValueError, pptx_adapter.TargetNotEditableError) as exc:
+                    raise StaleLocatorError(
+                        f"stale locator: {item_id} is no longer valid for {document_path}"
+                    ) from exc
+        finally:
+            connection.close()
+
+    def _resolve_write_output_path(
+        self,
+        document_path: Path,
+        *,
+        output_mode: OutputMode,
+    ) -> Path:
+        normalized_mode = _normalize_output_mode(output_mode)
+        if normalized_mode == "inplace":
+            if not self.config.allow_inplace_overwrite:
+                raise RuntimeError(
+                    "In-place overwrite is not enabled. Set allow_inplace_overwrite = true to use output-mode inplace."
+                )
+            return document_path
+
+        return versioning.build_versioned_output_path(
+            document_path,
+            output_directory=self.config.output_directory,
         )
 
     def run_doctor(
@@ -443,7 +512,7 @@ def _build_document_ref(path: Path, file_type: FileType) -> DocumentRef:
     resolved = path.resolve()
     document_id = hashlib.sha256(str(resolved).encode("utf-8")).hexdigest()
     stat_result = resolved.stat()
-    content_hash = hashlib.sha256(resolved.read_bytes()).hexdigest()
+    content_hash = _content_hash(resolved)
     return DocumentRef(
         document_id=document_id,
         path=resolved,
@@ -516,6 +585,27 @@ def _item_ref_from_row(row: sqlite3.Row) -> ItemRef:
 def _metadata_value(row: sqlite3.Row, key: str, *, default=None):
     metadata = json.loads(row["metadata_json"])
     return metadata.get(key, default)
+
+
+def _normalize_output_mode(output_mode: str) -> OutputMode:
+    normalized = output_mode.strip().lower()
+    if normalized not in {"versioned", "inplace"}:
+        raise ValueError(f"Unsupported output mode: {output_mode}")
+    return normalized  # type: ignore[return-value]
+
+
+def _content_hash(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _ensure_current_target_resolves(document_path: Path, file_type: FileType, item_id: str) -> None:
+    if file_type == "docx":
+        docx_adapter.read_paragraph(document_path, item_id)
+        return
+    if file_type == "pptx":
+        pptx_adapter.read_text_shape(document_path, item_id)
+        return
+    xlsx_adapter.read_cell(document_path, item_id)
 
 
 def _raise_if_pptx_target_not_editable(document_path: Path, item_id: str) -> None:

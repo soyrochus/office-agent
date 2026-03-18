@@ -17,8 +17,10 @@ The project is being built incrementally. The current implementation includes:
 - PPTX search, locate, read, replace, and append operations
 - XLSX cell extraction and indexing
 - XLSX search, locate, read, write-cell, and guarded append operations
+- versioned write outputs with automatic reindexing
+- stale-locator detection for write commands
 
-Current scope is intentionally narrow. DOCX, PPTX, and XLSX are the currently implemented document formats. MCP integration and versioned write outputs are not implemented yet.
+Current scope is intentionally narrow. DOCX, PPTX, and XLSX are the currently implemented document formats. MCP integration is not implemented yet.
 
 ## Current Features
 
@@ -27,6 +29,7 @@ Current scope is intentionally narrow. DOCX, PPTX, and XLSX are the currently im
 - `office-agent doctor` checks required imports, SQLite availability, FTS5 support, index path writability, and configured document roots
 - configuration loads from a TOML file with environment variable overrides
 - Office file discovery supports `.docx`, `.pptx`, and `.xlsx` roots at the base layer
+- write commands default to versioned output files and automatic reindexing
 
 ### DOCX Workflow
 
@@ -37,6 +40,7 @@ Current scope is intentionally narrow. DOCX, PPTX, and XLSX are the currently im
 - read the current paragraph text from the source document
 - replace a paragraph while preserving the first run's character formatting
 - append text to the last run of a paragraph, or create a run for an empty paragraph
+- write versioned output files by default, with optional in-place overwrite when explicitly enabled
 
 DOCX indexing uses paragraph-level item ids in the form `para:<n>`. Empty paragraphs are included so paragraph numbering stays stable.
 
@@ -48,6 +52,7 @@ DOCX indexing uses paragraph-level item ids in the form `para:<n>`. Empty paragr
 - read the current text-frame content from the source presentation
 - replace the full text-frame content of one shape
 - append text to an existing editable text frame
+- write versioned output files by default, with optional in-place overwrite when explicitly enabled
 
 PPTX indexing uses shape-level item ids in the form `slide:<n>:shape:<id>`. Only shapes with text frames are indexed. Tables, charts, images, SmartArt, and other non-text shapes are excluded, and PPTX write attempts to those targets fail with `target not editable`.
 
@@ -60,6 +65,7 @@ PPTX indexing uses shape-level item ids in the form `slide:<n>:shape:<id>`. Only
 - read the current cell value or formula text from the source workbook
 - write one cell value directly with `write-cell`
 - append text only to empty or string-compatible cells
+- write versioned output files by default, with optional in-place overwrite when explicitly enabled
 
 XLSX indexing uses cell-level item ids in the form `sheet:<name>!<coordinate>`. Only non-empty cells are indexed. Formula cells are indexed by formula text, and append attempts to numeric or formula cells fail with an error directing the user to `write-cell`.
 
@@ -87,6 +93,8 @@ Example `office-agent.toml`:
 [offagent]
 index_path = ".offagent/index.sqlite3"
 document_roots = ["./docs"]
+output_directory = "./edited"
+allow_inplace_overwrite = false
 ```
 
 Environment variables override file settings:
@@ -94,12 +102,44 @@ Environment variables override file settings:
 - `OFFAGENT_CONFIG`
 - `OFFAGENT_INDEX_PATH`
 - `OFFAGENT_DOCUMENT_ROOTS`
+- `OFFAGENT_OUTPUT_DIRECTORY`
+- `OFFAGENT_ALLOW_INPLACE_OVERWRITE`
 
 `OFFAGENT_DOCUMENT_ROOTS` uses the platform path separator, for example `:` on macOS/Linux.
 
+Configuration fields:
+
+- `index_path`: SQLite index file location
+- `document_roots`: directories scanned by discovery and directory-based indexing
+- `output_directory`: optional directory for versioned write outputs; defaults to the source document directory
+- `allow_inplace_overwrite`: when `true`, write commands may use `--output-mode inplace`; default is `false`
+
 ## CLI
 
+All commands accept `--config <path>` after the command name. Example:
+
+```bash
+uv run office-agent search "supplier shall" --config office-agent.toml
+```
+
+Write commands also accept `--output-mode <mode>` where `<mode>` is:
+
+- `versioned`: default; writes `<name>.edited.<timestamp>.<ext>` and reindexes the new file
+- `inplace`: overwrites the source file, but only if `allow_inplace_overwrite = true`
+
+Common exit codes:
+
+- `0`: success
+- `1`: validation, lookup, runtime, or unsupported-operation failure
+- `3`: stale-locator failure during a write command
+
 ### Doctor
+
+Checks runtime health.
+
+Options:
+
+- `--config <path>`: optional config file path
 
 ```bash
 uv run office-agent doctor
@@ -107,6 +147,16 @@ uv run office-agent doctor --config office-agent.toml
 ```
 
 ### Index And Reindex
+
+`index` indexes one file or all supported Office files under a directory. `reindex` currently re-runs the same indexing flow.
+
+Arguments:
+
+- `path`: file or directory to index
+
+Options:
+
+- `--config <path>`: optional config file path
 
 ```bash
 uv run office-agent index ./docs
@@ -119,6 +169,18 @@ uv run office-agent reindex ./docs/sample.xlsx
 ```
 
 ### Search
+
+Searches indexed content through SQLite FTS5.
+
+Arguments:
+
+- `query`: search text
+
+Options:
+
+- `--type <docx|pptx|xlsx>`: restrict search to one document type
+- `--doc <path>`: restrict search to one indexed document path
+- `--config <path>`: optional config file path
 
 ```bash
 uv run office-agent search "supplier shall"
@@ -134,6 +196,24 @@ The current implementation returns item hits with item id, score, and preview te
 
 ### Locate
 
+Resolves a direct item reference for one document.
+
+Options:
+
+- `--doc <path>`: required document path
+- `--paragraph <n>`: DOCX-only paragraph lookup
+- `--slide <n>`: PPTX-only slide lookup
+- `--shape <id>`: optional PPTX shape narrowing; only valid with `--slide`
+- `--sheet <name>`: XLSX-only worksheet lookup
+- `--cell <coordinate>`: XLSX-only cell coordinate; only valid with `--sheet`
+- `--config <path>`: optional config file path
+
+Valid option combinations:
+
+- DOCX: `--doc` + `--paragraph`
+- PPTX: `--doc` + `--slide` with optional `--shape`
+- XLSX: `--doc` + `--sheet` + `--cell`
+
 ```bash
 uv run office-agent locate --doc ./docs/sample.docx --paragraph 3
 uv run office-agent locate --doc ./docs/sample.pptx --slide 1
@@ -143,6 +223,14 @@ uv run office-agent locate --doc ./docs/sample.xlsx --sheet Budget2026 --cell B1
 
 ### Read
 
+Reads the current source content for one indexed item.
+
+Options:
+
+- `--doc <path>`: required document path
+- `--item <item-id>`: required item id
+- `--config <path>`: optional config file path
+
 ```bash
 uv run office-agent read --doc ./docs/sample.docx --item para:3
 uv run office-agent read --doc ./docs/sample.pptx --item slide:1:shape:7
@@ -151,12 +239,45 @@ uv run office-agent read --doc ./docs/sample.xlsx --item sheet:Budget2026!B12
 
 ### Replace
 
+Replaces the full text of one DOCX paragraph or PPTX text shape.
+
+Options:
+
+- `--doc <path>`: required document path
+- `--item <item-id>`: required item id
+- `--text <value>`: replacement text
+- `--output-mode <versioned|inplace>`: write mode; default `versioned`
+- `--config <path>`: optional config file path
+
+Notes:
+
+- `replace` is supported for DOCX and PPTX only
+- XLSX uses `write-cell` instead of `replace`
+
 ```bash
 uv run office-agent replace --doc ./docs/sample.docx --item para:3 --text "Updated paragraph text."
 uv run office-agent replace --doc ./docs/sample.pptx --item slide:1:shape:7 --text "Updated slide text."
+uv run office-agent replace --doc ./docs/sample.docx --item para:3 --text "Updated paragraph text." --output-mode versioned
 ```
 
 ### Append
+
+Appends text to one supported target.
+
+Options:
+
+- `--doc <path>`: required document path
+- `--item <item-id>`: required item id
+- `--text <value>`: appended text
+- `--output-mode <versioned|inplace>`: write mode; default `versioned`
+- `--config <path>`: optional config file path
+
+Notes:
+
+- DOCX appends to the target paragraph
+- PPTX appends to the target text frame
+- XLSX appends only to empty or string-compatible cells
+- stale-locator failures exit with code `3`
 
 ```bash
 uv run office-agent append --doc ./docs/sample.docx --item para:3 --text " Additional text."
@@ -166,11 +287,49 @@ uv run office-agent append --doc ./docs/sample.xlsx --item sheet:Notes!A1 --text
 
 ### Write Cell
 
+Writes one XLSX cell value directly.
+
+Options:
+
+- `--doc <path>`: required `.xlsx` document path
+- `--sheet <name>`: required worksheet name
+- `--cell <coordinate>`: required cell coordinate
+- `--value <value>`: new cell value
+- `--output-mode <versioned|inplace>`: write mode; default `versioned`
+- `--config <path>`: optional config file path
+
 ```bash
 uv run office-agent write-cell --doc ./docs/sample.xlsx --sheet Budget2026 --cell B12 --value "125000"
+uv run office-agent write-cell --doc ./docs/sample.xlsx --sheet Budget2026 --cell B12 --value "125000" --output-mode inplace
 ```
 
-At the moment, DOCX and PPTX `replace` and `append`, plus XLSX `write-cell` and `append`, write in place and then reindex the updated file.
+## Item Id Reference
+
+Use these item-id formats with `read`, `replace`, and `append`:
+
+- DOCX: `para:<n>`
+- PPTX: `slide:<slide-number>:shape:<shape-id>`
+- XLSX: `sheet:<worksheet-name>!<cell-coordinate>`
+
+## Write Behavior
+
+By default, all write commands create a versioned output file:
+
+- `sample.docx` -> `sample.edited.20260318-214512345678.docx`
+- `deck.pptx` -> `deck.edited.20260318-214512345678.pptx`
+- `budget.xlsx` -> `budget.edited.20260318-214512345678.xlsx`
+
+After a successful write:
+
+- the output file is automatically reindexed
+- CLI output reports the written output path
+- search results can resolve against the new version immediately
+
+If the source file changed after indexing:
+
+- the service compares the current file hash to the indexed `content_hash`
+- it tries to re-resolve the same item id against the current file
+- if that fails, the command exits with stale-locator error code `3`
 
 ## Development
 
@@ -202,11 +361,12 @@ Implemented:
 - DOCX paragraph extraction and editing workflow
 - PPTX text-shape extraction and editing workflow
 - XLSX cell extraction and editing workflow
+- versioned write outputs with automatic reindex
+- stale-locator protection for write commands
 
 Not implemented yet:
 
 - MCP interface
-- versioned output paths for write operations
 - richer locator resolution beyond the current direct DOCX, PPTX, and XLSX flows
 
 

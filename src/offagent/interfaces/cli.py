@@ -3,7 +3,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Annotated
 
-from offagent.app.services import AppServices, IndexSummary, PatchResult, format_doctor_report
+from offagent.app.services import (
+    AppServices,
+    IndexSummary,
+    PatchResult,
+    StaleLocatorError,
+    format_doctor_report,
+)
 from offagent.config import load_config
 
 try:
@@ -128,20 +134,22 @@ def build_app():
         doc: Annotated[Path, typer.Option("--doc")],
         item: Annotated[str, typer.Option("--item")],
         text: Annotated[str, typer.Option("--text")],
+        output_mode: Annotated[str, typer.Option("--output-mode")] = "versioned",
         config: Annotated[Path | None, CONFIG_OPTION] = None,
     ) -> None:
         services = AppServices(load_config(config))
-        _run_command(lambda: _echo_patch_result(services.replace_item_text(doc, item, text)))
+        _run_command(lambda: _echo_patch_result(services.replace_item_text(doc, item, text, output_mode=output_mode)))
 
     @app.command()
     def append(
         doc: Annotated[Path, typer.Option("--doc")],
         item: Annotated[str, typer.Option("--item")],
         text: Annotated[str, typer.Option("--text")],
+        output_mode: Annotated[str, typer.Option("--output-mode")] = "versioned",
         config: Annotated[Path | None, CONFIG_OPTION] = None,
     ) -> None:
         services = AppServices(load_config(config))
-        _run_command(lambda: _echo_patch_result(services.append_item_text(doc, item, text)))
+        _run_command(lambda: _echo_patch_result(services.append_item_text(doc, item, text, output_mode=output_mode)))
 
     @app.command("write-cell")
     def write_cell(
@@ -149,10 +157,15 @@ def build_app():
         sheet: Annotated[str, typer.Option("--sheet")],
         cell: Annotated[str, typer.Option("--cell")],
         value: Annotated[str, typer.Option("--value")],
+        output_mode: Annotated[str, typer.Option("--output-mode")] = "versioned",
         config: Annotated[Path | None, CONFIG_OPTION] = None,
     ) -> None:
         services = AppServices(load_config(config))
-        _run_command(lambda: _echo_patch_result(services.write_cell_value(doc, sheet, cell, value)))
+        _run_command(
+            lambda: _echo_patch_result(
+                services.write_cell_value(doc, sheet, cell, value, output_mode=output_mode)
+            )
+        )
 
     return app
 
@@ -163,6 +176,9 @@ def _run_command(callback) -> None:
 
     try:
         callback()
+    except StaleLocatorError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=3) from exc
     except (FileNotFoundError, LookupError, RuntimeError, ValueError) as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 from docx import Document
 
 from offagent.app.services import AppServices
@@ -30,14 +31,50 @@ def test_replace_append_and_reindex_docx(sample_docx, tmp_path) -> None:
     services.index_document(sample_docx)
 
     replace_result = services.replace_item_text(sample_docx, "para:1", "Replaced alpha text.")
-    append_result = services.append_item_text(sample_docx, "para:2", "Now populated.")
+    append_result = services.append_item_text(replace_result.output_path, "para:2", "Now populated.")
 
-    document = Document(str(sample_docx))
+    original_document = Document(str(sample_docx))
+    replaced_document = Document(str(replace_result.output_path))
+    appended_document = Document(str(append_result.output_path))
+
     assert replace_result.text == "Replaced alpha text."
     assert append_result.text == "Now populated."
-    assert document.paragraphs[1].runs[0].bold is True
-    assert document.paragraphs[2].text == "Now populated."
+    assert replace_result.output_path != sample_docx
+    assert ".edited." in replace_result.output_path.name
+    assert original_document.paragraphs[1].text == "Alpha paragraph for search."
+    assert replaced_document.paragraphs[1].text == "Replaced alpha text."
+    assert appended_document.paragraphs[1].runs[0].bold is True
+    assert appended_document.paragraphs[2].text == "Now populated."
 
-    services.reindex_path(sample_docx)
-    hits = services.search_corpus("Replaced alpha")
-    assert hits[0].item_id == "para:1"
+    hits = services.search_corpus("Now populated")
+    assert hits[0].item_id == "para:2"
+    assert hits[0].document_path == append_result.output_path
+
+
+def test_replace_inplace_requires_opt_in_docx(sample_docx, tmp_path) -> None:
+    services = AppServices(
+        AppConfig(index_path=tmp_path / "state" / "index.sqlite3", document_roots=(tmp_path,))
+    )
+    services.index_document(sample_docx)
+
+    with pytest.raises(RuntimeError, match="In-place overwrite is not enabled"):
+        services.replace_item_text(sample_docx, "para:1", "Blocked overwrite.", output_mode="inplace")
+
+    allowed_services = AppServices(
+        AppConfig(
+            index_path=tmp_path / "allowed" / "index.sqlite3",
+            document_roots=(tmp_path,),
+            allow_inplace_overwrite=True,
+        )
+    )
+    allowed_services.index_document(sample_docx)
+    result = allowed_services.replace_item_text(
+        sample_docx,
+        "para:1",
+        "Allowed overwrite.",
+        output_mode="inplace",
+    )
+
+    document = Document(str(sample_docx))
+    assert result.output_path == sample_docx
+    assert document.paragraphs[1].text == "Allowed overwrite."

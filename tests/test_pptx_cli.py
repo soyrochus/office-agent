@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from pathlib import Path
 
 from pptx import Presentation
 
@@ -22,6 +23,10 @@ def _run_cli(config_path, *args: str) -> subprocess.CompletedProcess[str]:
         text=True,
         check=False,
     )
+
+
+def _parse_output_path(stdout: str) -> Path:
+    return Path(stdout.strip().split("\t")[-1])
 
 
 def test_pptx_cli_round_trip(sample_pptx, config_path) -> None:
@@ -53,16 +58,18 @@ def test_pptx_cli_round_trip(sample_pptx, config_path) -> None:
         "--text",
         "CLI updated speaker notes.",
     )
+    replace_output_path = _parse_output_path(replace_result.stdout)
     append_result = _run_cli(
         config_path,
         "append",
         "--doc",
-        str(sample_pptx),
+        str(replace_output_path),
         "--item",
         editable_item.item_id,
         "--text",
         "\nCLI appended action.",
     )
+    append_output_path = _parse_output_path(append_result.stdout)
 
     assert index_result.returncode == 0, index_result.stderr
     assert "indexed 1" in index_result.stdout
@@ -86,6 +93,9 @@ def test_pptx_cli_round_trip(sample_pptx, config_path) -> None:
     assert replace_result.returncode == 0, replace_result.stderr
     assert append_result.returncode == 0, append_result.stderr
 
-    presentation = Presentation(str(sample_pptx))
+    original_presentation = Presentation(str(sample_pptx))
+    presentation = Presentation(str(append_output_path))
+    original_shape = next(shape for shape in original_presentation.slides[1].shapes if shape.has_text_frame)
     editable_shape = next(shape for shape in presentation.slides[1].shapes if shape.has_text_frame)
+    assert original_shape.text_frame.text == "Editable speaker notes"
     assert editable_shape.text_frame.text == "CLI updated speaker notes.\nCLI appended action."
