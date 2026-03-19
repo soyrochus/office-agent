@@ -12,11 +12,15 @@ The system SHALL provide a Python package named `offagent` with modules for conf
 - **THEN** it exposes the `src/offagent/` package with `config.py`, `domain/models.py`, `domain/locators.py`, `indexing/store.py`, `app/services.py`, and `interfaces/cli.py`
 
 ### Requirement: CLI entrypoint wiring
-The system SHALL expose an `office-agent` CLI entrypoint that initializes the application through the shared interface layer rather than embedding behavior directly in packaging metadata or shell scripts.
+The system SHALL expose an `office-agent` CLI entrypoint that initializes the application through the shared interface layer rather than embedding behavior directly in packaging metadata or shell scripts. That interface layer SHALL expose the full supported command surface, including `list`, `show`, and shared output-mode options needed for the final CLI contract.
 
 #### Scenario: CLI command is available
 - **WHEN** the package is installed in a Python environment
 - **THEN** the `office-agent` command resolves to the Typer-based CLI application defined in the interface layer
+
+#### Scenario: Final command surface is wired through the shared CLI app
+- **WHEN** a user requests supported document-management commands such as `list`, `show`, `search`, or write workflows
+- **THEN** the shared CLI application exposes those commands and their final output-mode options through one interface entrypoint
 
 ### Requirement: Foundational domain contracts
 The system SHALL define stable shared models for document references, item references, search hits, and patch operations so indexing, search, and edit flows can exchange consistent identifiers and payloads.
