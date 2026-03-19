@@ -185,6 +185,30 @@ def fetch_document_by_path(connection: sqlite3.Connection, document_path: Path) 
     ).fetchone()
 
 
+def fetch_document_by_id(connection: sqlite3.Connection, document_id: str) -> sqlite3.Row | None:
+    return connection.execute(
+        """
+        SELECT *
+        FROM documents
+        WHERE document_id = ? AND is_active = 1
+        """,
+        (document_id,),
+    ).fetchone()
+
+
+def fetch_documents(connection: sqlite3.Connection) -> list[sqlite3.Row]:
+    return list(
+        connection.execute(
+            """
+            SELECT *
+            FROM documents
+            WHERE is_active = 1
+            ORDER BY path
+            """
+        ).fetchall()
+    )
+
+
 def fetch_item_by_id(
     connection: sqlite3.Connection,
     document_id: str,

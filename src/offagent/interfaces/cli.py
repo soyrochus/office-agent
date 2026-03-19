@@ -167,6 +167,19 @@ def build_app():
             )
         )
 
+    @app.command()
+    def mcp(
+        config: Annotated[Path | None, CONFIG_OPTION] = None,
+    ) -> None:
+        settings = load_config(config)
+
+        def runner() -> None:
+            from offagent.interfaces.mcp import run_mcp_server
+
+            run_mcp_server(settings)
+
+        _run_command(runner)
+
     return app
 
 

@@ -27,6 +27,7 @@ INDEXABLE_EXTENSIONS: dict[str, FileType] = {
 }
 
 REQUIRED_IMPORTS: tuple[tuple[str, str], ...] = (
+    ("mcp", "MCP Python SDK"),
     ("typer", "Typer"),
     ("pydantic", "Pydantic"),
     ("dotenv", "python-dotenv"),
@@ -80,6 +81,25 @@ class AppServices:
     def discover_documents(self) -> list[DocumentRef]:
         return discover_documents(self.config.document_roots)
 
+    def list_documents(self) -> list[DocumentRef]:
+        connection = store.ensure_ready(self.config.index_path)
+        try:
+            rows = store.fetch_documents(connection)
+        finally:
+            connection.close()
+        return [_document_ref_from_row(row) for row in rows]
+
+    def get_document(self, document_id: str) -> DocumentRef:
+        connection = store.ensure_ready(self.config.index_path)
+        try:
+            document_row = self._resolve_document_by_id_row(connection, document_id)
+        finally:
+            connection.close()
+        return _document_ref_from_row(document_row)
+
+    def resolve_document_path(self, document_id: str) -> Path:
+        return self.get_document(document_id).path
+
     def index_path(self, path: Path) -> IndexSummary:
         candidates = _index_candidates(path)
         indexed = 0
@@ -101,6 +121,9 @@ class AppServices:
     def reindex_path(self, path: Path) -> IndexSummary:
         return self.index_path(path)
 
+    def refresh_document(self, document_id: str) -> IndexSummary:
+        return self.reindex_path(self.resolve_document_path(document_id))
+
     def index_document(self, document_path: Path) -> DocumentRef:
         resolved_path, file_type = _require_indexable_path(document_path)
         document_ref = _build_document_ref(resolved_path, file_type)
@@ -121,6 +144,7 @@ class AppServices:
         *,
         file_type: str | None = None,
         document_path: Path | None = None,
+        limit: int = 20,
     ) -> list[SearchHit]:
         if file_type not in (None, "docx", "pptx", "xlsx"):
             raise ValueError("Only DOCX, PPTX, and XLSX search are supported in this feature.")
@@ -132,6 +156,7 @@ class AppServices:
                 query,
                 file_type=file_type,
                 document_path=document_path,
+                limit=limit,
             )
         finally:
             connection.close()
@@ -464,6 +489,16 @@ class AppServices:
             raise LookupError(f"Document is not indexed: {document_path}")
         return document_row
 
+    def _resolve_document_by_id_row(
+        self,
+        connection: sqlite3.Connection,
+        document_id: str,
+    ) -> sqlite3.Row:
+        document_row = store.fetch_document_by_id(connection, document_id)
+        if document_row is None:
+            raise LookupError(f"Document is not indexed: {document_id}")
+        return document_row
+
     def _resolve_indexed_item_row(
         self,
         connection: sqlite3.Connection,
@@ -568,6 +603,17 @@ def _search_hit_from_row(row: sqlite3.Row) -> SearchHit:
         preview=row["preview"],
         document_path=Path(row["path"]),
         display_name=row["display_name"],
+    )
+
+
+def _document_ref_from_row(row: sqlite3.Row) -> DocumentRef:
+    return DocumentRef(
+        document_id=row["document_id"],
+        path=Path(row["path"]),
+        file_type=row["file_type"],
+        display_name=row["display_name"],
+        modified_time=float(row["modified_time"]),
+        content_hash=row["content_hash"],
     )
 
 
