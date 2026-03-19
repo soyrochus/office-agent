@@ -9,10 +9,12 @@ def build_versioned_output_path(
     *,
     output_directory: Path | None = None,
     timestamp: datetime | None = None,
+    create_directory: bool = True,
 ) -> Path:
     source = source_path.resolve()
     target_directory = source.parent if output_directory is None else output_directory.expanduser()
-    target_directory.mkdir(parents=True, exist_ok=True)
+    if create_directory:
+        target_directory.mkdir(parents=True, exist_ok=True)
     rendered_timestamp = _render_timestamp(timestamp)
     filename = f"{source.stem}.edited.{rendered_timestamp}{source.suffix}"
     return target_directory / filename

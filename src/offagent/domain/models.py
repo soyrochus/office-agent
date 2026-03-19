@@ -16,6 +16,7 @@ class DocumentRef:
     display_name: str
     modified_time: float
     content_hash: str | None = None
+    item_count: int | None = None
 
 
 @dataclass(frozen=True)
@@ -26,6 +27,7 @@ class ItemRef:
     locator: str
     preview: str
     metadata: dict[str, Any] = field(default_factory=dict)
+    content_text: str | None = None
 
 
 @dataclass(frozen=True)

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from offagent.domain.models import IndexedItem
+from offagent.errors import InvalidArgumentsError, TargetNotFoundError
 
 try:
     from docx import Document
@@ -90,17 +91,19 @@ def _open_document(document_path: Path):
 
 def _resolve_paragraph(document, item_id: str):
     if not item_id.startswith("para:"):
-        raise ValueError(f"Unsupported DOCX paragraph item id: {item_id}")
+        raise InvalidArgumentsError(f"Unsupported DOCX paragraph item id: {item_id}")
 
     try:
         paragraph_index = int(item_id.split(":", maxsplit=1)[1])
     except ValueError as exc:
-        raise ValueError(f"Invalid DOCX paragraph item id: {item_id}") from exc
+        raise InvalidArgumentsError(f"Invalid DOCX paragraph item id: {item_id}") from exc
 
     try:
         return document.paragraphs[paragraph_index]
     except IndexError as exc:
-        raise LookupError(f"Paragraph {paragraph_index} does not exist in the document.") from exc
+        raise TargetNotFoundError(
+            f"Paragraph {paragraph_index} does not exist in the document."
+        ) from exc
 
 
 def _capture_run_formatting(run: Run | None) -> RunFormatting | None:

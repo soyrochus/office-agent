@@ -5,10 +5,17 @@ from pathlib import Path
 from typing import Callable, TypeVar
 
 from offagent.adapters import pptx_adapter, xlsx_adapter
-from offagent.app.services import AppServices, StaleLocatorError
+from offagent.app.services import AppServices
 from offagent.config import AppConfig
 from offagent.domain.locators import parse_locator
 from offagent.domain.models import DocumentRef, ItemRef
+from offagent.errors import (
+    InvalidArgumentsError,
+    PolicyRefusedError,
+    StaleLocatorError,
+    TargetNotEditableError,
+    TargetNotFoundError,
+)
 from offagent.interfaces.mcp_models import (
     AppendTextRequest,
     IndexDocumentsRequest,
@@ -39,10 +46,12 @@ LOGGER = logging.getLogger(__name__)
 
 EXPECTED_TOOL_ERRORS = (
     FileNotFoundError,
-    LookupError,
-    RuntimeError,
+    InvalidArgumentsError,
+    TargetNotFoundError,
+    TargetNotEditableError,
+    PolicyRefusedError,
     StaleLocatorError,
-    ValueError,
+    RuntimeError,
     pptx_adapter.TargetNotEditableError,
     xlsx_adapter.TargetNotAppendableError,
 )
@@ -277,13 +286,13 @@ def _parse_docx_locator(locator: str) -> int:
         try:
             return int(normalized.split(":", maxsplit=1)[1])
         except ValueError as exc:
-            raise ValueError(f"Invalid DOCX paragraph locator: {locator}") from exc
+            raise InvalidArgumentsError(f"Invalid DOCX paragraph locator: {locator}") from exc
     if lowered.startswith("paragraph "):
         try:
             return int(normalized.split()[-1])
         except ValueError as exc:
-            raise ValueError(f"Invalid DOCX paragraph locator: {locator}") from exc
-    raise ValueError("DOCX locate_item expects a locator like `para:3` or `paragraph 3`.")
+            raise InvalidArgumentsError(f"Invalid DOCX paragraph locator: {locator}") from exc
+    raise InvalidArgumentsError("DOCX locate_item expects a locator like `para:3` or `paragraph 3`.")
 
 
 def _parse_pptx_locator(locator: str) -> tuple[int, int]:
@@ -298,9 +307,11 @@ def _parse_pptx_locator(locator: str) -> tuple[int, int]:
             try:
                 return int(tokens[1]), int(tokens[3])
             except ValueError as exc:
-                raise ValueError(f"Invalid PPTX locator: {locator}") from exc
+                raise InvalidArgumentsError(f"Invalid PPTX locator: {locator}") from exc
 
-    raise ValueError("PPTX locate_item expects an exact shape locator like `slide:1:shape:3`.")
+    raise InvalidArgumentsError(
+        "PPTX locate_item expects an exact shape locator like `slide:1:shape:3`."
+    )
 
 
 def _parse_xlsx_locator(locator: str) -> tuple[str, str]:
@@ -312,9 +323,9 @@ def _parse_xlsx_locator(locator: str) -> tuple[str, str]:
     if lowered.startswith("sheet "):
         payload = normalized[6:].strip()
         if " " not in payload:
-            raise ValueError(f"Invalid XLSX locator: {locator}")
+            raise InvalidArgumentsError(f"Invalid XLSX locator: {locator}")
         sheet_name, coordinate = payload.rsplit(" ", maxsplit=1)
         _, normalized_coordinate = xlsx_adapter.parse_item_id(f"sheet:{sheet_name}!{coordinate}")
         return sheet_name, normalized_coordinate
 
-    raise ValueError("XLSX locate_item expects a locator like `sheet:Sheet1!A1`.")
+    raise InvalidArgumentsError("XLSX locate_item expects a locator like `sheet:Sheet1!A1`.")

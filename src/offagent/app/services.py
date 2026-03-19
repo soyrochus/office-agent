@@ -12,7 +12,15 @@ from typing import Iterable, Literal, Sequence
 from offagent.adapters import docx_adapter, pptx_adapter, xlsx_adapter
 from offagent.config import AppConfig
 from offagent.domain.models import DocumentRef, FileType, ItemRef, SearchHit
+from offagent.errors import InvalidArgumentsError, PolicyRefusedError, StaleLocatorError
+from offagent.errors import TargetNotFoundError
 from offagent.indexing import store
+from offagent.path_policy import (
+    canonicalize_existing_path,
+    canonicalize_output_path,
+    ensure_path_allowed,
+    normalize_roots,
+)
 from offagent.storage import versioning
 
 SUPPORTED_EXTENSIONS: dict[str, FileType] = {
@@ -70,16 +78,13 @@ class PatchResult:
     text: str
 
 
-class StaleLocatorError(RuntimeError):
-    """Raised when a previously indexed target no longer resolves safely."""
-
-
 @dataclass
 class AppServices:
     config: AppConfig
 
     def discover_documents(self) -> list[DocumentRef]:
-        return discover_documents(self.config.document_roots)
+        documents = discover_documents(self.config.document_roots)
+        return [document for document in documents if self._is_allowed_document_path(document.path)]
 
     def list_documents(self) -> list[DocumentRef]:
         connection = store.ensure_ready(self.config.index_path)
@@ -87,7 +92,11 @@ class AppServices:
             rows = store.fetch_documents(connection)
         finally:
             connection.close()
-        return [_document_ref_from_row(row) for row in rows]
+        return [
+            _document_ref_from_row(row)
+            for row in rows
+            if self._is_allowed_document_path(Path(row["path"]))
+        ]
 
     def get_document(self, document_id: str) -> DocumentRef:
         connection = store.ensure_ready(self.config.index_path)
@@ -95,17 +104,40 @@ class AppServices:
             document_row = self._resolve_document_by_id_row(connection, document_id)
         finally:
             connection.close()
+        document = _document_ref_from_row(document_row)
+        self._ensure_allowed_document_path(document.path, action="read")
+        return document
+
+    def show_document(self, document_path: Path) -> DocumentRef:
+        connection = store.ensure_ready(self.config.index_path)
+        try:
+            resolved_path, _ = self._require_allowed_document_path(document_path, action="show")
+            document_row = self._resolve_document_row(connection, resolved_path)
+        finally:
+            connection.close()
         return _document_ref_from_row(document_row)
+
+    def show_item(self, document_path: Path, item_id: str) -> ItemRef:
+        connection = store.ensure_ready(self.config.index_path)
+        try:
+            resolved_path, _ = self._require_allowed_document_path(document_path, action="show")
+            document_row, item_row = self._resolve_item_row(connection, resolved_path, item_id)
+        finally:
+            connection.close()
+        return _item_ref_from_row(item_row)
 
     def resolve_document_path(self, document_id: str) -> Path:
         return self.get_document(document_id).path
 
     def index_path(self, path: Path) -> IndexSummary:
-        candidates = _index_candidates(path)
+        resolved_input = canonicalize_existing_path(path)
+        self._ensure_allowed_document_path(resolved_input, action="index")
+        candidates = _index_candidates(resolved_input)
         indexed = 0
         skipped = 0
 
         for candidate in candidates:
+            self._ensure_allowed_document_path(candidate, action="index")
             if candidate.suffix.lower() not in INDEXABLE_EXTENSIONS:
                 skipped += 1
                 continue
@@ -125,7 +157,7 @@ class AppServices:
         return self.reindex_path(self.resolve_document_path(document_id))
 
     def index_document(self, document_path: Path) -> DocumentRef:
-        resolved_path, file_type = _require_indexable_path(document_path)
+        resolved_path, file_type = self._require_allowed_document_path(document_path, action="index")
         document_ref = _build_document_ref(resolved_path, file_type)
         items = _extract_items(resolved_path, file_type)
 
@@ -147,21 +179,31 @@ class AppServices:
         limit: int = 20,
     ) -> list[SearchHit]:
         if file_type not in (None, "docx", "pptx", "xlsx"):
-            raise ValueError("Only DOCX, PPTX, and XLSX search are supported in this feature.")
+            raise InvalidArgumentsError(
+                "Only DOCX, PPTX, and XLSX search are supported in this feature."
+            )
 
+        resolved_document_path = None
+        if document_path is not None:
+            resolved_document_path, _ = self._require_allowed_document_path(document_path, action="search")
         connection = store.ensure_ready(self.config.index_path)
         try:
             rows = store.search_items(
                 connection,
                 query,
                 file_type=file_type,
-                document_path=document_path,
+                document_path=resolved_document_path,
                 limit=limit,
             )
         finally:
             connection.close()
 
-        return [_search_hit_from_row(row) for row in rows]
+        hits = [_search_hit_from_row(row) for row in rows]
+        return [
+            hit
+            for hit in hits
+            if hit.document_path is not None and self._is_allowed_document_path(hit.document_path)
+        ]
 
     def locate_paragraph(self, document_path: Path, paragraph_index: int) -> ItemRef:
         return self.locate_items(document_path, paragraph_index=paragraph_index)[0]
@@ -187,7 +229,7 @@ class AppServices:
         sheet_name: str | None = None,
         cell_coordinate: str | None = None,
     ) -> list[ItemRef]:
-        resolved_path, file_type = _require_indexable_path(document_path)
+        resolved_path, file_type = self._require_allowed_document_path(document_path, action="locate")
         connection = store.ensure_ready(self.config.index_path)
         try:
             document_row = self._resolve_document_row(connection, resolved_path)
@@ -199,7 +241,9 @@ class AppServices:
                     or sheet_name is not None
                     or cell_coordinate is not None
                 ):
-                    raise ValueError("DOCX locate requires --paragraph and does not support --slide.")
+                    raise InvalidArgumentsError(
+                        "DOCX locate requires --paragraph and does not support --slide."
+                    )
                 item_row = self._resolve_indexed_item_row(
                     connection,
                     document_row,
@@ -210,9 +254,11 @@ class AppServices:
 
             if file_type == "pptx":
                 if paragraph_index is not None or sheet_name is not None or cell_coordinate is not None:
-                    raise ValueError("PPTX locate supports --slide and optional --shape only.")
+                    raise InvalidArgumentsError(
+                        "PPTX locate supports --slide and optional --shape only."
+                    )
                 if slide_number is None:
-                    raise ValueError("PPTX locate requires --slide.")
+                    raise InvalidArgumentsError("PPTX locate requires --slide.")
 
                 item_rows = store.fetch_items_for_document(connection, document_row["document_id"])
                 matches = [
@@ -229,18 +275,18 @@ class AppServices:
                 )
                 if not matches:
                     if shape_id is None:
-                        raise LookupError(
+                        raise TargetNotFoundError(
                             f"No indexed PPTX text shapes found on slide {slide_number} for {resolved_path}"
                         )
-                    raise LookupError(
+                    raise TargetNotFoundError(
                         f"No indexed PPTX text shape found for slide {slide_number} shape {shape_id} in {resolved_path}"
                     )
                 return [_item_ref_from_row(row) for row in matches]
 
             if paragraph_index is not None or slide_number is not None or shape_id is not None:
-                raise ValueError("XLSX locate supports --sheet and --cell only.")
+                raise InvalidArgumentsError("XLSX locate supports --sheet and --cell only.")
             if sheet_name is None or cell_coordinate is None:
-                raise ValueError("XLSX locate requires --sheet and --cell.")
+                raise InvalidArgumentsError("XLSX locate requires --sheet and --cell.")
 
             item_row = self._resolve_indexed_item_row(
                 connection,
@@ -253,7 +299,7 @@ class AppServices:
             connection.close()
 
     def read_item(self, document_path: Path, item_id: str) -> str:
-        resolved_path, file_type = _require_indexable_path(document_path)
+        resolved_path, file_type = self._require_allowed_document_path(document_path, action="read")
         connection = store.ensure_ready(self.config.index_path)
         try:
             document_row = self._resolve_document_row(connection, resolved_path)
@@ -274,9 +320,9 @@ class AppServices:
         *,
         output_mode: OutputMode = "versioned",
     ) -> PatchResult:
-        resolved_path, file_type = _require_indexable_path(document_path)
+        resolved_path, file_type = self._require_allowed_document_path(document_path, action="write")
         if file_type == "xlsx":
-            raise ValueError("XLSX replace is not supported; use write-cell.")
+            raise InvalidArgumentsError("XLSX replace is not supported; use write-cell.")
 
         self._prepare_write_target(
             resolved_path,
@@ -321,7 +367,7 @@ class AppServices:
         *,
         output_mode: OutputMode = "versioned",
     ) -> PatchResult:
-        resolved_path, file_type = _require_indexable_path(document_path)
+        resolved_path, file_type = self._require_allowed_document_path(document_path, action="write")
         self._prepare_write_target(
             resolved_path,
             file_type,
@@ -369,9 +415,9 @@ class AppServices:
         *,
         output_mode: OutputMode = "versioned",
     ) -> PatchResult:
-        resolved_path, file_type = _require_indexable_path(document_path)
+        resolved_path, file_type = self._require_allowed_document_path(document_path, action="write")
         if file_type != "xlsx":
-            raise ValueError("write-cell requires an .xlsx path.")
+            raise InvalidArgumentsError("write-cell requires an .xlsx path.")
 
         item_id = xlsx_adapter.make_item_id(sheet_name, cell_coordinate)
         self._prepare_write_target(
@@ -418,7 +464,7 @@ class AppServices:
             if require_indexed_item:
                 try:
                     self._resolve_indexed_item_row(connection, document_row, item_id, document_path)
-                except LookupError:
+                except TargetNotFoundError:
                     if file_type == "pptx":
                         _raise_if_pptx_target_not_editable(document_path, item_id)
                     raise
@@ -426,7 +472,12 @@ class AppServices:
             if document_row["content_hash"] != _content_hash(document_path):
                 try:
                     _ensure_current_target_resolves(document_path, file_type, item_id)
-                except (LookupError, ValueError, pptx_adapter.TargetNotEditableError) as exc:
+                except (
+                    InvalidArgumentsError,
+                    TargetNotFoundError,
+                    pptx_adapter.TargetNotEditableError,
+                    xlsx_adapter.TargetNotAppendableError,
+                ) as exc:
                     raise StaleLocatorError(
                         f"stale locator: {item_id} is no longer valid for {document_path}"
                     ) from exc
@@ -442,15 +493,20 @@ class AppServices:
         normalized_mode = _normalize_output_mode(output_mode)
         if normalized_mode == "inplace":
             if not self.config.allow_inplace_overwrite:
-                raise RuntimeError(
+                raise PolicyRefusedError(
                     "In-place overwrite is not enabled. Set allow_inplace_overwrite = true to use output-mode inplace."
                 )
+            self._ensure_allowed_output_path(document_path)
             return document_path
 
-        return versioning.build_versioned_output_path(
+        output_path = versioning.build_versioned_output_path(
             document_path,
             output_directory=self.config.output_directory,
+            create_directory=False,
         )
+        self._ensure_allowed_output_path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        return output_path
 
     def run_doctor(
         self,
@@ -465,8 +521,55 @@ class AppServices:
         checks.append(_check_fts5_support())
         checks.append(_check_index_path(self.config.index_path))
         checks.extend(_check_document_roots(self.config.document_roots))
+        checks.extend(_check_allowed_roots(self.config.allowed_roots))
+        checks.extend(_check_output_roots(self.config.output_roots))
 
         return DoctorReport(checks=tuple(checks))
+
+    def _require_allowed_document_path(
+        self,
+        document_path: Path,
+        *,
+        action: str,
+    ) -> tuple[Path, FileType]:
+        resolved_path, file_type = _require_indexable_path(document_path)
+        self._ensure_allowed_document_path(resolved_path, action=action)
+        return resolved_path, file_type
+
+    def _ensure_allowed_document_path(self, document_path: Path, *, action: str) -> Path:
+        resolved_path = canonicalize_existing_path(document_path)
+        return ensure_path_allowed(
+            resolved_path,
+            self._read_policy_roots(),
+            label=f"{action} target",
+            policy_name="allowed roots",
+        )
+
+    def _ensure_allowed_output_path(self, output_path: Path) -> Path:
+        resolved_output_path = canonicalize_output_path(output_path)
+        return ensure_path_allowed(
+            resolved_output_path,
+            self.config.output_roots,
+            label="write output",
+            policy_name="output roots",
+        )
+
+    def _is_allowed_document_path(self, document_path: Path) -> bool:
+        try:
+            self._ensure_allowed_document_path(document_path, action="read")
+        except (PolicyRefusedError, TargetNotFoundError):
+            return False
+        return True
+
+    def _read_policy_roots(self) -> tuple[Path, ...]:
+        combined = list(self.config.allowed_roots) + list(self.config.output_roots)
+        unique_roots: list[Path] = []
+        seen: set[Path] = set()
+        for root in combined:
+            if root not in seen:
+                unique_roots.append(root)
+                seen.add(root)
+        return tuple(unique_roots)
 
     def _resolve_item_row(
         self,
@@ -474,7 +577,7 @@ class AppServices:
         document_path: Path,
         item_id: str,
     ) -> tuple[sqlite3.Row, sqlite3.Row]:
-        resolved_path, _ = _require_indexable_path(document_path)
+        resolved_path, _ = self._require_allowed_document_path(document_path, action="show")
         document_row = self._resolve_document_row(connection, resolved_path)
         item_row = self._resolve_indexed_item_row(connection, document_row, item_id, resolved_path)
         return document_row, item_row
@@ -486,7 +589,7 @@ class AppServices:
     ) -> sqlite3.Row:
         document_row = store.fetch_document_by_path(connection, document_path)
         if document_row is None:
-            raise LookupError(f"Document is not indexed: {document_path}")
+            raise TargetNotFoundError(f"Document is not indexed: {document_path}")
         return document_row
 
     def _resolve_document_by_id_row(
@@ -496,7 +599,7 @@ class AppServices:
     ) -> sqlite3.Row:
         document_row = store.fetch_document_by_id(connection, document_id)
         if document_row is None:
-            raise LookupError(f"Document is not indexed: {document_id}")
+            raise TargetNotFoundError(f"Document is not indexed: {document_id}")
         return document_row
 
     def _resolve_indexed_item_row(
@@ -508,7 +611,7 @@ class AppServices:
     ) -> sqlite3.Row:
         item_row = store.fetch_item_by_id(connection, document_row["document_id"], item_id)
         if item_row is None:
-            raise LookupError(f"Item {item_id} is not indexed for {document_path}")
+            raise TargetNotFoundError(f"Item {item_id} is not indexed for {document_path}")
         return item_row
 
 
@@ -573,12 +676,12 @@ def _index_candidates(path: Path) -> list[Path]:
 
 
 def _require_indexable_path(path: Path) -> tuple[Path, FileType]:
-    resolved = path.resolve()
+    resolved = canonicalize_existing_path(path)
     file_type = INDEXABLE_EXTENSIONS.get(resolved.suffix.lower())
     if file_type is None:
-        raise ValueError(f"Implemented operations require a .docx, .pptx, or .xlsx path: {path}")
-    if not resolved.exists():
-        raise FileNotFoundError(resolved)
+        raise InvalidArgumentsError(
+            f"Implemented operations require a .docx, .pptx, or .xlsx path: {path}"
+        )
     return resolved, file_type
 
 
@@ -589,7 +692,7 @@ def _extract_items(document_path: Path, file_type: FileType):
         return pptx_adapter.extract_document(document_path)
     if file_type == "xlsx":
         return xlsx_adapter.extract_document(document_path)
-    raise ValueError(f"Unsupported indexable file type: {file_type}")
+    raise InvalidArgumentsError(f"Unsupported indexable file type: {file_type}")
 
 
 def _search_hit_from_row(row: sqlite3.Row) -> SearchHit:
@@ -614,6 +717,7 @@ def _document_ref_from_row(row: sqlite3.Row) -> DocumentRef:
         display_name=row["display_name"],
         modified_time=float(row["modified_time"]),
         content_hash=row["content_hash"],
+        item_count=None if "item_count" not in row.keys() else int(row["item_count"]),
     )
 
 
@@ -625,6 +729,7 @@ def _item_ref_from_row(row: sqlite3.Row) -> ItemRef:
         locator=row["locator"],
         preview=row["preview"],
         metadata=json.loads(row["metadata_json"]),
+        content_text=row["content_text"],
     )
 
 
@@ -636,7 +741,7 @@ def _metadata_value(row: sqlite3.Row, key: str, *, default=None):
 def _normalize_output_mode(output_mode: str) -> OutputMode:
     normalized = output_mode.strip().lower()
     if normalized not in {"versioned", "inplace"}:
-        raise ValueError(f"Unsupported output mode: {output_mode}")
+        raise InvalidArgumentsError(f"Unsupported output mode: {output_mode}")
     return normalized  # type: ignore[return-value]
 
 
@@ -659,7 +764,7 @@ def _raise_if_pptx_target_not_editable(document_path: Path, item_id: str) -> Non
         pptx_adapter.resolve_shape(document_path, item_id)
     except pptx_adapter.TargetNotEditableError:
         raise
-    except (LookupError, ValueError):
+    except (TargetNotFoundError, InvalidArgumentsError):
         return
 
 
@@ -714,3 +819,63 @@ def _check_document_roots(roots: Sequence[Path]) -> list[DoctorCheck]:
         else:
             checks.append(DoctorCheck(f"Document Root {root}", False, "Directory is not readable."))
     return checks
+
+
+def _check_allowed_roots(roots: Sequence[Path]) -> list[DoctorCheck]:
+    if not roots:
+        return [DoctorCheck("Allowed Roots", True, "No allowed-root policy configured.")]
+    return _check_resolved_roots("Allowed Root", normalize_roots(roots), require_writable=False)
+
+
+def _check_output_roots(roots: Sequence[Path]) -> list[DoctorCheck]:
+    if not roots:
+        return [DoctorCheck("Output Roots", True, "No output-root policy configured.")]
+    return _check_resolved_roots("Output Root", normalize_roots(roots), require_writable=True)
+
+
+def _check_resolved_roots(
+    label: str,
+    roots: Sequence[Path],
+    *,
+    require_writable: bool,
+) -> list[DoctorCheck]:
+    checks: list[DoctorCheck] = []
+    for root in roots:
+        if root.exists():
+            if not root.is_dir():
+                checks.append(DoctorCheck(f"{label} {root}", False, "Path is not a directory."))
+                continue
+            if require_writable and not os.access(root, os.W_OK):
+                checks.append(DoctorCheck(f"{label} {root}", False, "Directory is not writable."))
+                continue
+            if not require_writable and not os.access(root, os.R_OK):
+                checks.append(DoctorCheck(f"{label} {root}", False, "Directory is not readable."))
+                continue
+            checks.append(DoctorCheck(f"{label} {root}", True, "Policy root is usable."))
+            continue
+
+        existing_parent = _nearest_existing_parent(root)
+        access_mode = os.W_OK if require_writable else os.R_OK
+        if existing_parent is not None and os.access(existing_parent, access_mode):
+            checks.append(
+                DoctorCheck(f"{label} {root}", True, f"Parent path {existing_parent} is accessible.")
+            )
+            continue
+        checks.append(
+            DoctorCheck(
+                f"{label} {root}",
+                False,
+                "Path does not exist and no accessible parent directory was found.",
+            )
+        )
+    return checks
+
+
+def _nearest_existing_parent(path: Path) -> Path | None:
+    current = path
+    while True:
+        if current.exists():
+            return current
+        if current.parent == current:
+            return None
+        current = current.parent

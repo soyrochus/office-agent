@@ -5,12 +5,27 @@ from typing import Annotated
 
 from offagent.app.services import (
     AppServices,
-    IndexSummary,
-    PatchResult,
-    StaleLocatorError,
-    format_doctor_report,
 )
 from offagent.config import load_config
+from offagent.errors import (
+    InvalidArgumentsError,
+    PolicyRefusedError,
+    StaleLocatorError,
+    TargetNotEditableError,
+    TargetNotFoundError,
+)
+from offagent.interfaces.cli_output import (
+    emit_output,
+    render_doctor_report,
+    render_document,
+    render_documents,
+    render_index_summary,
+    render_item,
+    render_items,
+    render_patch_result,
+    render_search_hits,
+    render_text_result,
+)
 
 try:
     import typer
@@ -26,6 +41,19 @@ if typer is not None:
     )
 else:  # pragma: no cover - exercised only when typer is unavailable
     CONFIG_OPTION = None
+
+if typer is not None:
+    JSON_OPTION = typer.Option(
+        "--json",
+        help="Emit machine-readable JSON with no extra text.",
+    )
+    QUIET_OPTION = typer.Option(
+        "--quiet",
+        help="Suppress successful command output.",
+    )
+else:  # pragma: no cover - exercised only when typer is unavailable
+    JSON_OPTION = None
+    QUIET_OPTION = None
 
 
 def main() -> None:
@@ -50,27 +78,60 @@ def build_app():
     @app.command()
     def doctor(
         config: Annotated[Path | None, CONFIG_OPTION] = None,
+        as_json: Annotated[bool, JSON_OPTION] = False,
+        quiet: Annotated[bool, QUIET_OPTION] = False,
     ) -> None:
         settings = load_config(config)
-        report = AppServices(settings).run_doctor()
-        typer.echo(format_doctor_report(report))
+        services = AppServices(settings)
+        report = _run_command(lambda: services.run_doctor(), as_json=as_json, quiet=quiet)
+        emit_output(
+            report,
+            as_json=as_json,
+            quiet=quiet,
+            human_renderer=render_doctor_report,
+            echo=typer.echo,
+        )
         raise typer.Exit(code=0 if report.ok else 1)
 
     @app.command("index")
     def index_command(
         path: Path,
         config: Annotated[Path | None, CONFIG_OPTION] = None,
+        as_json: Annotated[bool, JSON_OPTION] = False,
+        quiet: Annotated[bool, QUIET_OPTION] = False,
     ) -> None:
         services = AppServices(load_config(config))
-        _run_command(lambda: _echo_index_summary(services.index_path(path)))
+        _run_command(
+            lambda: emit_output(
+                {"path": path.resolve(), "summary": services.index_path(path)},
+                as_json=as_json,
+                quiet=quiet,
+                human_renderer=render_index_summary,
+                echo=typer.echo,
+            ),
+            as_json=as_json,
+            quiet=quiet,
+        )
 
     @app.command("reindex")
     def reindex_command(
         path: Path,
         config: Annotated[Path | None, CONFIG_OPTION] = None,
+        as_json: Annotated[bool, JSON_OPTION] = False,
+        quiet: Annotated[bool, QUIET_OPTION] = False,
     ) -> None:
         services = AppServices(load_config(config))
-        _run_command(lambda: _echo_index_summary(services.reindex_path(path)))
+        _run_command(
+            lambda: emit_output(
+                {"path": path.resolve(), "summary": services.reindex_path(path)},
+                as_json=as_json,
+                quiet=quiet,
+                human_renderer=render_index_summary,
+                echo=typer.echo,
+            ),
+            as_json=as_json,
+            quiet=quiet,
+        )
 
     @app.command()
     def search(
@@ -78,21 +139,22 @@ def build_app():
         file_type: Annotated[str | None, typer.Option("--type")] = None,
         doc: Annotated[Path | None, typer.Option("--doc")] = None,
         config: Annotated[Path | None, CONFIG_OPTION] = None,
+        as_json: Annotated[bool, JSON_OPTION] = False,
+        quiet: Annotated[bool, QUIET_OPTION] = False,
     ) -> None:
         services = AppServices(load_config(config))
 
         def runner() -> None:
             hits = services.search_corpus(query, file_type=file_type, document_path=doc)
-            if not hits:
-                typer.echo("No matches found.")
-                return
-            for hit in hits:
-                typer.echo(
-                    f"{hit.item_id}\tscore={hit.score:.3f}\tdoc={hit.display_name or hit.document_path}"
-                )
-                typer.echo(hit.preview)
+            emit_output(
+                {"hits": hits},
+                as_json=as_json,
+                quiet=quiet,
+                human_renderer=lambda payload: render_search_hits(payload["hits"]),
+                echo=typer.echo,
+            )
 
-        _run_command(runner)
+        _run_command(runner, as_json=as_json, quiet=quiet)
 
     @app.command()
     def locate(
@@ -103,6 +165,8 @@ def build_app():
         sheet: Annotated[str | None, typer.Option("--sheet")] = None,
         cell: Annotated[str | None, typer.Option("--cell")] = None,
         config: Annotated[Path | None, CONFIG_OPTION] = None,
+        as_json: Annotated[bool, JSON_OPTION] = False,
+        quiet: Annotated[bool, QUIET_OPTION] = False,
     ) -> None:
         services = AppServices(load_config(config))
 
@@ -115,19 +179,36 @@ def build_app():
                 sheet_name=sheet,
                 cell_coordinate=cell,
             )
-            for item in items:
-                _echo_item(item)
+            emit_output(
+                {"items": items},
+                as_json=as_json,
+                quiet=quiet,
+                human_renderer=lambda payload: render_items(payload["items"]),
+                echo=typer.echo,
+            )
 
-        _run_command(runner)
+        _run_command(runner, as_json=as_json, quiet=quiet)
 
     @app.command()
     def read(
         doc: Annotated[Path, typer.Option("--doc")],
         item: Annotated[str, typer.Option("--item")],
         config: Annotated[Path | None, CONFIG_OPTION] = None,
+        as_json: Annotated[bool, JSON_OPTION] = False,
+        quiet: Annotated[bool, QUIET_OPTION] = False,
     ) -> None:
         services = AppServices(load_config(config))
-        _run_command(lambda: typer.echo(services.read_item(doc, item)))
+        _run_command(
+            lambda: emit_output(
+                {"document_path": doc.resolve(), "item_id": item, "text": services.read_item(doc, item)},
+                as_json=as_json,
+                quiet=quiet,
+                human_renderer=render_text_result,
+                echo=typer.echo,
+            ),
+            as_json=as_json,
+            quiet=quiet,
+        )
 
     @app.command()
     def replace(
@@ -136,9 +217,21 @@ def build_app():
         text: Annotated[str, typer.Option("--text")],
         output_mode: Annotated[str, typer.Option("--output-mode")] = "versioned",
         config: Annotated[Path | None, CONFIG_OPTION] = None,
+        as_json: Annotated[bool, JSON_OPTION] = False,
+        quiet: Annotated[bool, QUIET_OPTION] = False,
     ) -> None:
         services = AppServices(load_config(config))
-        _run_command(lambda: _echo_patch_result(services.replace_item_text(doc, item, text, output_mode=output_mode)))
+        _run_command(
+            lambda: emit_output(
+                services.replace_item_text(doc, item, text, output_mode=output_mode),
+                as_json=as_json,
+                quiet=quiet,
+                human_renderer=render_patch_result,
+                echo=typer.echo,
+            ),
+            as_json=as_json,
+            quiet=quiet,
+        )
 
     @app.command()
     def append(
@@ -147,9 +240,21 @@ def build_app():
         text: Annotated[str, typer.Option("--text")],
         output_mode: Annotated[str, typer.Option("--output-mode")] = "versioned",
         config: Annotated[Path | None, CONFIG_OPTION] = None,
+        as_json: Annotated[bool, JSON_OPTION] = False,
+        quiet: Annotated[bool, QUIET_OPTION] = False,
     ) -> None:
         services = AppServices(load_config(config))
-        _run_command(lambda: _echo_patch_result(services.append_item_text(doc, item, text, output_mode=output_mode)))
+        _run_command(
+            lambda: emit_output(
+                services.append_item_text(doc, item, text, output_mode=output_mode),
+                as_json=as_json,
+                quiet=quiet,
+                human_renderer=render_patch_result,
+                echo=typer.echo,
+            ),
+            as_json=as_json,
+            quiet=quiet,
+        )
 
     @app.command("write-cell")
     def write_cell(
@@ -159,13 +264,70 @@ def build_app():
         value: Annotated[str, typer.Option("--value")],
         output_mode: Annotated[str, typer.Option("--output-mode")] = "versioned",
         config: Annotated[Path | None, CONFIG_OPTION] = None,
+        as_json: Annotated[bool, JSON_OPTION] = False,
+        quiet: Annotated[bool, QUIET_OPTION] = False,
     ) -> None:
         services = AppServices(load_config(config))
         _run_command(
-            lambda: _echo_patch_result(
-                services.write_cell_value(doc, sheet, cell, value, output_mode=output_mode)
-            )
+            lambda: emit_output(
+                services.write_cell_value(doc, sheet, cell, value, output_mode=output_mode),
+                as_json=as_json,
+                quiet=quiet,
+                human_renderer=render_patch_result,
+                echo=typer.echo,
+            ),
+            as_json=as_json,
+            quiet=quiet,
         )
+
+    @app.command("list")
+    def list_command(
+        config: Annotated[Path | None, CONFIG_OPTION] = None,
+        as_json: Annotated[bool, JSON_OPTION] = False,
+        quiet: Annotated[bool, QUIET_OPTION] = False,
+    ) -> None:
+        services = AppServices(load_config(config))
+        _run_command(
+            lambda: emit_output(
+                {"documents": services.list_documents()},
+                as_json=as_json,
+                quiet=quiet,
+                human_renderer=lambda payload: render_documents(payload["documents"]),
+                echo=typer.echo,
+            ),
+            as_json=as_json,
+            quiet=quiet,
+        )
+
+    @app.command()
+    def show(
+        doc: Annotated[Path, typer.Option("--doc")],
+        item: Annotated[str | None, typer.Option("--item")] = None,
+        config: Annotated[Path | None, CONFIG_OPTION] = None,
+        as_json: Annotated[bool, JSON_OPTION] = False,
+        quiet: Annotated[bool, QUIET_OPTION] = False,
+    ) -> None:
+        services = AppServices(load_config(config))
+
+        def runner() -> None:
+            if item is None:
+                emit_output(
+                    services.show_document(doc),
+                    as_json=as_json,
+                    quiet=quiet,
+                    human_renderer=render_document,
+                    echo=typer.echo,
+                )
+                return
+            emit_output(
+                services.show_item(doc, item),
+                as_json=as_json,
+                quiet=quiet,
+                human_renderer=render_item,
+                echo=typer.echo,
+            )
+
+        _run_command(runner, as_json=as_json, quiet=quiet)
 
     @app.command()
     def mcp(
@@ -182,36 +344,30 @@ def build_app():
 
     return app
 
-
-def _run_command(callback) -> None:
+def _run_command(callback, *, as_json: bool = False, quiet: bool = False):
     if typer is None:
         raise RuntimeError("Typer is unavailable.")
 
     try:
-        callback()
-    except StaleLocatorError as exc:
+        _validate_output_flags(as_json, quiet)
+        return callback()
+    except InvalidArgumentsError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=2) from exc
+    except (FileNotFoundError, TargetNotFoundError, StaleLocatorError) as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=3) from exc
-    except (FileNotFoundError, LookupError, RuntimeError, ValueError) as exc:
+    except TargetNotEditableError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=4) from exc
+    except PolicyRefusedError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=5) from exc
+    except RuntimeError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc
 
 
-def _echo_index_summary(summary: IndexSummary) -> None:
-    if typer is None:
-        raise RuntimeError("Typer is unavailable.")
-    typer.echo(
-        f"Scanned {summary.files_scanned} file(s); indexed {summary.files_indexed}; skipped {summary.files_skipped}."
-    )
-
-
-def _echo_item(item) -> None:
-    if typer is None:
-        raise RuntimeError("Typer is unavailable.")
-    typer.echo(f"{item.item_id}\t{item.locator}\t{item.preview}")
-
-
-def _echo_patch_result(result: PatchResult) -> None:
-    if typer is None:
-        raise RuntimeError("Typer is unavailable.")
-    typer.echo(f"{result.item.item_id}\tupdated\t{result.output_path}")
+def _validate_output_flags(as_json: bool, quiet: bool) -> None:
+    if as_json and quiet:
+        raise InvalidArgumentsError("Choose either --json or --quiet, not both.")

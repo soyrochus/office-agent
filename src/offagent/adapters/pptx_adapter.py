@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from offagent.domain.models import IndexedItem
+from offagent.errors import InvalidArgumentsError, TargetNotEditableError as BaseTargetNotEditableError
+from offagent.errors import TargetNotFoundError
 
 try:
     from pptx import Presentation
@@ -21,7 +23,7 @@ class ResolvedShape:
     text: str
 
 
-class TargetNotEditableError(RuntimeError):
+class TargetNotEditableError(BaseTargetNotEditableError):
     """Raised when a requested PPTX target exists but is not a text frame."""
 
 
@@ -101,16 +103,16 @@ def resolve_shape(document_path: Path, item_id: str) -> ResolvedShape:
 def parse_item_id(item_id: str) -> tuple[int, int]:
     parts = item_id.split(":")
     if len(parts) != 4 or parts[0] != "slide" or parts[2] != "shape":
-        raise ValueError(f"Unsupported PPTX item id: {item_id}")
+        raise InvalidArgumentsError(f"Unsupported PPTX item id: {item_id}")
 
     try:
         slide_number = int(parts[1])
         shape_id = int(parts[3])
     except ValueError as exc:
-        raise ValueError(f"Invalid PPTX item id: {item_id}") from exc
+        raise InvalidArgumentsError(f"Invalid PPTX item id: {item_id}") from exc
 
     if slide_number < 1:
-        raise ValueError(f"Invalid PPTX slide number: {slide_number}")
+        raise InvalidArgumentsError(f"Invalid PPTX slide number: {slide_number}")
 
     return slide_number, shape_id
 
@@ -131,13 +133,15 @@ def _resolve_shape(presentation, item_id: str):
     try:
         slide = presentation.slides[slide_number - 1]
     except IndexError as exc:
-        raise LookupError(f"Slide {slide_number} does not exist in the presentation.") from exc
+        raise TargetNotFoundError(
+            f"Slide {slide_number} does not exist in the presentation."
+        ) from exc
 
     for shape in slide.shapes:
         if shape.shape_id == shape_id:
             return shape
 
-    raise LookupError(f"Shape {shape_id} does not exist on slide {slide_number}.")
+    raise TargetNotFoundError(f"Shape {shape_id} does not exist on slide {slide_number}.")
 
 
 def _require_text_frame(shape):

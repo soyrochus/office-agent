@@ -20,6 +20,7 @@ class DocumentModel(MCPModel):
     display_name: str
     modified_time: float
     content_hash: str | None = None
+    item_count: int | None = None
 
     @classmethod
     def from_document_ref(cls, document: DocumentRef) -> "DocumentModel":
@@ -30,6 +31,7 @@ class DocumentModel(MCPModel):
             display_name=document.display_name,
             modified_time=document.modified_time,
             content_hash=document.content_hash,
+            item_count=document.item_count,
         )
 
 

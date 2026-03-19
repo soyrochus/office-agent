@@ -12,6 +12,7 @@ Office-Agent (`offagent`) is a local-first Office document tool with a shared ap
 The project is being built incrementally. The current implementation includes:
 
 - project configuration and environment diagnostics
+- allowed-root and output-root path guards for read and write workflows
 - a local SQLite + FTS5 index
 - DOCX paragraph extraction and indexing
 - DOCX search, locate, read, replace, and append operations
@@ -19,6 +20,8 @@ The project is being built incrementally. The current implementation includes:
 - PPTX search, locate, read, replace, and append operations
 - XLSX cell extraction and indexing
 - XLSX search, locate, read, write-cell, and guarded append operations
+- indexed document summaries with `list` and `show`
+- shared human-readable, JSON, and quiet CLI output modes
 - versioned write outputs with automatic reindexing
 - stale-locator detection for write commands
 - an MCP server over stdio implemented with FastMCP
@@ -29,9 +32,11 @@ Current scope is intentionally narrow. DOCX, PPTX, and XLSX are the currently im
 
 ### Base App
 
-- `office-agent doctor` checks required imports, SQLite availability, FTS5 support, index path writability, and configured document roots
+- `office-agent doctor` checks required imports, SQLite availability, FTS5 support, index path writability, configured document roots, and configured path-policy roots
 - configuration loads from a TOML file with environment variable overrides
 - Office file discovery supports `.docx`, `.pptx`, and `.xlsx` roots at the base layer
+- allowed-root policy protects index, show, locate, read, and search-by-document workflows
+- output-root policy protects versioned and in-place write targets
 - write commands default to versioned output files and automatic reindexing
 
 ### DOCX Workflow
@@ -104,7 +109,9 @@ Example `office-agent.toml`:
 [offagent]
 index_path = ".offagent/index.sqlite3"
 document_roots = ["./docs"]
+allowed_roots = ["./docs", "./edited"]
 output_directory = "./edited"
+output_roots = ["./edited", "./docs"]
 allow_inplace_overwrite = false
 ```
 
@@ -113,7 +120,9 @@ Environment variables override file settings:
 - `OFFAGENT_CONFIG`
 - `OFFAGENT_INDEX_PATH`
 - `OFFAGENT_DOCUMENT_ROOTS`
+- `OFFAGENT_ALLOWED_ROOTS`
 - `OFFAGENT_OUTPUT_DIRECTORY`
+- `OFFAGENT_OUTPUT_ROOTS`
 - `OFFAGENT_ALLOW_INPLACE_OVERWRITE`
 
 `OFFAGENT_DOCUMENT_ROOTS` uses the platform path separator, for example `:` on macOS/Linux.
@@ -122,7 +131,9 @@ Configuration fields:
 
 - `index_path`: SQLite index file location
 - `document_roots`: directories scanned by discovery and directory-based indexing
+- `allowed_roots`: canonical roots allowed for indexed read operations; empty means no read guard
 - `output_directory`: optional directory for versioned write outputs; defaults to the source document directory
+- `output_roots`: canonical roots allowed for write outputs; if omitted and `output_directory` is set, this defaults to that directory
 - `allow_inplace_overwrite`: when `true`, write commands may use `--output-mode inplace`; default is `false`
 
 ## CLI
@@ -133,6 +144,13 @@ All commands accept `--config <path>` after the command name. Example:
 uv run office-agent search "supplier shall" --config office-agent.toml
 ```
 
+Structured commands also accept:
+
+- `--json`: emit machine-readable JSON with no extra prose
+- `--quiet`: suppress successful stdout output
+
+`--json` and `--quiet` are mutually exclusive.
+
 Write commands also accept `--output-mode <mode>` where `<mode>` is:
 
 - `versioned`: default; writes `<name>.edited.<timestamp>.<ext>` and reindexes the new file
@@ -141,8 +159,11 @@ Write commands also accept `--output-mode <mode>` where `<mode>` is:
 Common exit codes:
 
 - `0`: success
-- `1`: validation, lookup, runtime, or unsupported-operation failure
-- `3`: stale-locator failure during a write command
+- `1`: other runtime failure
+- `2`: invalid arguments or incompatible flag combinations
+- `3`: not-found target, missing indexed item/document, or stale-locator write failure
+- `4`: not-editable target
+- `5`: policy-refused operation
 
 ### Doctor
 
@@ -204,6 +225,25 @@ uv run office-agent search "supplier shall" --type xlsx --doc ./docs/sample.xlsx
 ```
 
 The current implementation returns item hits with item id, score, and preview text.
+
+### List
+
+Lists indexed documents with document id, path, type, modified time, and indexed item count.
+
+```bash
+uv run office-agent list
+uv run office-agent list --json
+```
+
+### Show
+
+Shows one indexed document summary, or one indexed item within that document.
+
+```bash
+uv run office-agent show --doc ./docs/sample.docx
+uv run office-agent show --doc ./docs/sample.docx --item para:3
+uv run office-agent show --doc ./docs/sample.xlsx --item sheet:Budget2026!B12 --json
+```
 
 ### Locate
 
@@ -364,6 +404,7 @@ After a successful write:
 - the output file is automatically reindexed
 - CLI output reports the written output path
 - search results can resolve against the new version immediately
+- managed output roots are treated as readable workflow roots so versioned-write follow-up commands continue to work
 
 If the source file changed after indexing:
 
@@ -381,9 +422,12 @@ uv run pytest
 
 This repository also includes an example skill for Office-document workflows at [`.github/skills/office-agent`](./.github/skills/office-agent/). The location is VSCode specific but it should work for Claude Code and Codex as well.  
 
+Acceptance coverage uses checked-in golden Office fixtures under [`tests/fixtures`](./tests/fixtures/), including DOCX, PPTX, and XLSX documents exercised by the CLI and FastMCP integration suites.
+
 The test suite is written in `pytest` and includes:
 
 - configuration and diagnostics coverage
+- path-policy coverage
 - SQLite store coverage
 - DOCX adapter tests
 - DOCX service workflow tests
@@ -391,8 +435,9 @@ The test suite is written in `pytest` and includes:
 - PPTX service workflow tests
 - XLSX adapter tests
 - XLSX service workflow tests
-- CLI round-trip tests for DOCX, PPTX, and XLSX
-- FastMCP stdio integration tests for the MCP tool surface
+- CLI round-trip and acceptance tests for DOCX, PPTX, and XLSX
+- FastMCP stdio integration and acceptance tests for the MCP tool surface
+- CLI/MCP parity tests for the core index → search → locate → read → replace workflow
 
 ## Project Status
 
@@ -400,10 +445,13 @@ Implemented:
 
 - shared CLI/application-core structure
 - configuration and doctor checks
+- allowed-root and output-root policy enforcement
 - SQLite index bootstrap and FTS5-backed search
 - DOCX paragraph extraction and editing workflow
 - PPTX text-shape extraction and editing workflow
 - XLSX cell extraction and editing workflow
+- indexed document summary commands (`list` and `show`)
+- JSON and quiet CLI output modes
 - versioned write outputs with automatic reindex
 - stale-locator protection for write commands
 - MCP interface over stdio with FastMCP

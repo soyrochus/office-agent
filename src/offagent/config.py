@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
 
+from offagent.errors import InvalidArgumentsError
+
 try:
     from dotenv import load_dotenv
 except ModuleNotFoundError:  # pragma: no cover - exercised through doctor checks
@@ -16,7 +18,9 @@ DEFAULT_INDEX_PATH = Path(".offagent/index.sqlite3")
 ENV_CONFIG_PATH = "OFFAGENT_CONFIG"
 ENV_INDEX_PATH = "OFFAGENT_INDEX_PATH"
 ENV_DOCUMENT_ROOTS = "OFFAGENT_DOCUMENT_ROOTS"
+ENV_ALLOWED_ROOTS = "OFFAGENT_ALLOWED_ROOTS"
 ENV_OUTPUT_DIRECTORY = "OFFAGENT_OUTPUT_DIRECTORY"
+ENV_OUTPUT_ROOTS = "OFFAGENT_OUTPUT_ROOTS"
 ENV_ALLOW_INPLACE_OVERWRITE = "OFFAGENT_ALLOW_INPLACE_OVERWRITE"
 
 
@@ -24,7 +28,9 @@ ENV_ALLOW_INPLACE_OVERWRITE = "OFFAGENT_ALLOW_INPLACE_OVERWRITE"
 class AppConfig:
     index_path: Path = DEFAULT_INDEX_PATH
     document_roots: tuple[Path, ...] = ()
+    allowed_roots: tuple[Path, ...] = ()
     output_directory: Path | None = None
+    output_roots: tuple[Path, ...] = ()
     allow_inplace_overwrite: bool = False
     config_path: Path | None = None
 
@@ -42,7 +48,9 @@ def load_config(
     values: dict[str, object] = {
         "index_path": DEFAULT_INDEX_PATH,
         "document_roots": (),
+        "allowed_roots": (),
         "output_directory": None,
+        "output_roots": (),
         "allow_inplace_overwrite": False,
         "config_path": selected_config_path,
     }
@@ -54,18 +62,31 @@ def load_config(
         values["index_path"] = Path(env_values[ENV_INDEX_PATH]).expanduser()
 
     if ENV_DOCUMENT_ROOTS in env_values:
-        values["document_roots"] = _split_document_roots(env_values[ENV_DOCUMENT_ROOTS])
+        values["document_roots"] = _split_paths(env_values[ENV_DOCUMENT_ROOTS])
+
+    if ENV_ALLOWED_ROOTS in env_values:
+        values["allowed_roots"] = _split_paths(env_values[ENV_ALLOWED_ROOTS])
 
     if ENV_OUTPUT_DIRECTORY in env_values:
         values["output_directory"] = Path(env_values[ENV_OUTPUT_DIRECTORY]).expanduser()
 
+    if ENV_OUTPUT_ROOTS in env_values:
+        values["output_roots"] = _split_paths(env_values[ENV_OUTPUT_ROOTS])
+
     if ENV_ALLOW_INPLACE_OVERWRITE in env_values:
         values["allow_inplace_overwrite"] = _parse_bool(env_values[ENV_ALLOW_INPLACE_OVERWRITE])
+
+    output_directory = _expand_optional_path(values["output_directory"])
+    output_roots = tuple(Path(root).expanduser() for root in values["output_roots"])
+    if not output_roots and output_directory is not None:
+        output_roots = (output_directory,)
 
     return AppConfig(
         index_path=Path(values["index_path"]).expanduser(),
         document_roots=tuple(Path(root).expanduser() for root in values["document_roots"]),
-        output_directory=_expand_optional_path(values["output_directory"]),
+        allowed_roots=tuple(Path(root).expanduser() for root in values["allowed_roots"]),
+        output_directory=output_directory,
+        output_roots=output_roots,
         allow_inplace_overwrite=bool(values["allow_inplace_overwrite"]),
         config_path=selected_config_path,
     )
@@ -96,15 +117,19 @@ def _load_file_values(config_path: Path) -> dict[str, object]:
 
     payload = raw.get("offagent", raw)
     roots = payload.get("document_roots", ())
+    allowed_roots = payload.get("allowed_roots", ())
+    output_roots = payload.get("output_roots", ())
     return {
         "index_path": Path(payload.get("index_path", DEFAULT_INDEX_PATH)).expanduser(),
         "document_roots": tuple(Path(root).expanduser() for root in roots),
+        "allowed_roots": tuple(Path(root).expanduser() for root in allowed_roots),
         "output_directory": _optional_path(payload.get("output_directory")),
+        "output_roots": tuple(Path(root).expanduser() for root in output_roots),
         "allow_inplace_overwrite": bool(payload.get("allow_inplace_overwrite", False)),
     }
 
 
-def _split_document_roots(value: str) -> tuple[Path, ...]:
+def _split_paths(value: str) -> tuple[Path, ...]:
     if not value.strip():
         return ()
     return tuple(Path(part).expanduser() for part in value.split(os.pathsep) if part)
@@ -128,4 +153,4 @@ def _parse_bool(value: str) -> bool:
         return True
     if normalized in {"0", "false", "no", "off"}:
         return False
-    raise ValueError(f"Invalid boolean value: {value}")
+    raise InvalidArgumentsError(f"Invalid boolean value: {value}")

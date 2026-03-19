@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import pytest
@@ -7,6 +8,8 @@ from docx import Document
 from openpyxl import Workbook
 from pptx import Presentation
 from pptx.util import Inches
+
+FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 
 @pytest.fixture
@@ -82,4 +85,55 @@ def sample_xlsx(tmp_path) -> Path:
     notes_sheet["A2"] = "Follow up with finance."
 
     workbook.save(path)
+    return path
+
+
+def _copy_fixture(source_name: str, target_dir: Path) -> Path:
+    source = FIXTURES_DIR / source_name
+    target = target_dir / source_name
+    shutil.copy2(source, target)
+    return target
+
+
+@pytest.fixture
+def golden_workspace(tmp_path) -> Path:
+    workspace = tmp_path / "workspace"
+    docs_dir = workspace / "docs"
+    docs_dir.mkdir(parents=True)
+    _copy_fixture("golden.docx", docs_dir)
+    _copy_fixture("golden.pptx", docs_dir)
+    _copy_fixture("golden.xlsx", docs_dir)
+    return workspace
+
+
+@pytest.fixture
+def golden_docx(golden_workspace) -> Path:
+    return golden_workspace / "docs" / "golden.docx"
+
+
+@pytest.fixture
+def golden_pptx(golden_workspace) -> Path:
+    return golden_workspace / "docs" / "golden.pptx"
+
+
+@pytest.fixture
+def golden_xlsx(golden_workspace) -> Path:
+    return golden_workspace / "docs" / "golden.xlsx"
+
+
+@pytest.fixture
+def golden_config_path(golden_workspace) -> Path:
+    path = golden_workspace / "office-agent.toml"
+    docs_dir = golden_workspace / "docs"
+    output_dir = golden_workspace / "edited"
+    path.write_text(
+        f"""
+[offagent]
+index_path = "{(golden_workspace / 'state' / 'index.sqlite3').as_posix()}"
+document_roots = ["{docs_dir.as_posix()}"]
+allowed_roots = ["{docs_dir.as_posix()}"]
+output_directory = "{output_dir.as_posix()}"
+output_roots = ["{output_dir.as_posix()}", "{docs_dir.as_posix()}"]
+""".strip()
+    )
     return path

@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from offagent.domain.models import IndexedItem
+from offagent.errors import InvalidArgumentsError, TargetNotEditableError
+from offagent.errors import TargetNotFoundError
 
 try:
     from openpyxl import load_workbook
@@ -22,7 +24,7 @@ class ResolvedCell:
     display_text: str
 
 
-class TargetNotAppendableError(RuntimeError):
+class TargetNotAppendableError(TargetNotEditableError):
     """Raised when a requested XLSX target cannot accept append text."""
 
 
@@ -103,15 +105,15 @@ def resolve_cell(document_path: Path, item_id: str) -> ResolvedCell:
 
 def parse_item_id(item_id: str) -> tuple[str, str]:
     if not item_id.startswith("sheet:"):
-        raise ValueError(f"Unsupported XLSX item id: {item_id}")
+        raise InvalidArgumentsError(f"Unsupported XLSX item id: {item_id}")
 
     payload = item_id.removeprefix("sheet:")
     if "!" not in payload:
-        raise ValueError(f"Invalid XLSX item id: {item_id}")
+        raise InvalidArgumentsError(f"Invalid XLSX item id: {item_id}")
 
     sheet_name, coordinate = payload.rsplit("!", maxsplit=1)
     if not sheet_name:
-        raise ValueError(f"Invalid XLSX sheet name in item id: {item_id}")
+        raise InvalidArgumentsError(f"Invalid XLSX sheet name in item id: {item_id}")
     normalized_coordinate = _normalize_coordinate(coordinate)
     return sheet_name, normalized_coordinate
 
@@ -131,7 +133,9 @@ def _resolve_cell(workbook, item_id: str):
     try:
         worksheet = workbook[sheet_name]
     except KeyError as exc:
-        raise LookupError(f"Worksheet {sheet_name!r} does not exist in the workbook.") from exc
+        raise TargetNotFoundError(
+            f"Worksheet {sheet_name!r} does not exist in the workbook."
+        ) from exc
     return worksheet[coordinate]
 
 
@@ -164,13 +168,13 @@ def _coerce_value(value: str) -> object:
 def _normalize_coordinate(coordinate: str) -> str:
     normalized = coordinate.strip().upper()
     if not normalized:
-        raise ValueError("Cell coordinate cannot be empty.")
+        raise InvalidArgumentsError("Cell coordinate cannot be empty.")
     if coordinate_to_tuple is None:
         raise RuntimeError("openpyxl is required for XLSX operations.")
     try:
         coordinate_to_tuple(normalized)
     except ValueError as exc:
-        raise ValueError(f"Invalid XLSX cell coordinate: {coordinate}") from exc
+        raise InvalidArgumentsError(f"Invalid XLSX cell coordinate: {coordinate}") from exc
     return normalized
 
 

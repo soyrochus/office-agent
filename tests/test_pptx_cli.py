@@ -72,7 +72,7 @@ def test_pptx_cli_round_trip(sample_pptx, config_path) -> None:
     append_output_path = _parse_output_path(append_result.stdout)
 
     assert index_result.returncode == 0, index_result.stderr
-    assert "indexed 1" in index_result.stdout
+    assert "files_indexed=1" in index_result.stdout
     assert search_result.returncode == 0, search_result.stderr
     assert summary_item.item_id in search_result.stdout
     assert locate_slide_result.returncode == 0, locate_slide_result.stderr

@@ -74,7 +74,7 @@ def test_xlsx_cli_round_trip(sample_xlsx, config_path) -> None:
     append_output_path = _parse_output_path(append_result.stdout)
 
     assert index_result.returncode == 0, index_result.stderr
-    assert "indexed 1" in index_result.stdout
+    assert "files_indexed=1" in index_result.stdout
     assert search_result.returncode == 0, search_result.stderr
     assert "sheet:Notes 2026!A1" in search_result.stdout
     assert locate_result.returncode == 0, locate_result.stderr
@@ -105,7 +105,7 @@ def test_xlsx_cli_append_rejects_numeric_cells(sample_xlsx, config_path) -> None
         "should fail",
     )
 
-    assert append_result.returncode == 1
+    assert append_result.returncode == 4
     assert "write-cell" in append_result.stderr
 
 

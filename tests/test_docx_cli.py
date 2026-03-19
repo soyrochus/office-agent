@@ -56,7 +56,7 @@ def test_docx_cli_round_trip(sample_docx, config_path) -> None:
     append_output_path = _parse_output_path(append_result.stdout)
 
     assert index_result.returncode == 0, index_result.stderr
-    assert "indexed 1" in index_result.stdout
+    assert "files_indexed=1" in index_result.stdout
     assert search_result.returncode == 0, search_result.stderr
     assert "para:3" in search_result.stdout
     assert locate_result.returncode == 0, locate_result.stderr

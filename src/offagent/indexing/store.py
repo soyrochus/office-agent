@@ -177,9 +177,11 @@ def replace_document_items(
 def fetch_document_by_path(connection: sqlite3.Connection, document_path: Path) -> sqlite3.Row | None:
     return connection.execute(
         """
-        SELECT *
-        FROM documents
-        WHERE path = ? AND is_active = 1
+        SELECT d.*, COUNT(i.storage_id) AS item_count
+        FROM documents AS d
+        LEFT JOIN items AS i ON i.document_id = d.document_id
+        WHERE d.path = ? AND d.is_active = 1
+        GROUP BY d.document_id
         """,
         (str(document_path.resolve()),),
     ).fetchone()
@@ -188,9 +190,11 @@ def fetch_document_by_path(connection: sqlite3.Connection, document_path: Path) 
 def fetch_document_by_id(connection: sqlite3.Connection, document_id: str) -> sqlite3.Row | None:
     return connection.execute(
         """
-        SELECT *
-        FROM documents
-        WHERE document_id = ? AND is_active = 1
+        SELECT d.*, COUNT(i.storage_id) AS item_count
+        FROM documents AS d
+        LEFT JOIN items AS i ON i.document_id = d.document_id
+        WHERE d.document_id = ? AND d.is_active = 1
+        GROUP BY d.document_id
         """,
         (document_id,),
     ).fetchone()
@@ -200,10 +204,12 @@ def fetch_documents(connection: sqlite3.Connection) -> list[sqlite3.Row]:
     return list(
         connection.execute(
             """
-            SELECT *
-            FROM documents
-            WHERE is_active = 1
-            ORDER BY path
+            SELECT d.*, COUNT(i.storage_id) AS item_count
+            FROM documents AS d
+            LEFT JOIN items AS i ON i.document_id = d.document_id
+            WHERE d.is_active = 1
+            GROUP BY d.document_id
+            ORDER BY d.path
             """
         ).fetchall()
     )
