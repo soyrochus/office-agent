@@ -7,6 +7,8 @@
 
 Office-Agent (`offagent`) is a local-first Office document tool with a shared application core and a CLI entrypoint, `office-agent`.
 
+![Office Agent](./images/office-agent-small.png)
+
 The project is being built incrementally. The current implementation includes:
 
 - project configuration and environment diagnostics
@@ -19,8 +21,9 @@ The project is being built incrementally. The current implementation includes:
 - XLSX search, locate, read, write-cell, and guarded append operations
 - versioned write outputs with automatic reindexing
 - stale-locator detection for write commands
+- an MCP server over stdio implemented with FastMCP
 
-Current scope is intentionally narrow. DOCX, PPTX, and XLSX are the currently implemented document formats. MCP integration is not implemented yet.
+Current scope is intentionally narrow. DOCX, PPTX, and XLSX are the currently implemented document formats. The MCP surface currently supports stdio transport only.
 
 ## Current Features
 
@@ -68,6 +71,14 @@ PPTX indexing uses shape-level item ids in the form `slide:<n>:shape:<id>`. Only
 - write versioned output files by default, with optional in-place overwrite when explicitly enabled
 
 XLSX indexing uses cell-level item ids in the form `sheet:<name>!<coordinate>`. Only non-empty cells are indexed. Formula cells are indexed by formula text, and append attempts to numeric or formula cells fail with an error directing the user to `write-cell`.
+
+### MCP Server
+
+- start the MCP server with `office-agent mcp`
+- stdio transport is implemented for MCP-compatible clients
+- exposed MCP tools are `index_documents`, `refresh_document`, `list_documents`, `search_documents`, `locate_item`, `read_item`, `replace_text`, `append_text`, and `write_cell`
+- MCP requests reuse the shared application configuration and service layer rather than duplicating document logic
+- MCP responses are structured, and expected service failures are returned as MCP tool errors
 
 ## Installation
 
@@ -303,6 +314,35 @@ uv run office-agent write-cell --doc ./docs/sample.xlsx --sheet Budget2026 --cel
 uv run office-agent write-cell --doc ./docs/sample.xlsx --sheet Budget2026 --cell B12 --value "125000" --output-mode inplace
 ```
 
+### MCP
+
+Starts the FastMCP server on stdio.
+
+Options:
+
+- `--config <path>`: optional config file path
+
+```bash
+uv run office-agent mcp
+uv run office-agent mcp --config office-agent.toml
+```
+
+The MCP server exposes these tools:
+
+- `index_documents(paths)`
+- `refresh_document(document_id)`
+- `list_documents()`
+- `search_documents(query, file_type=None, document_id=None, limit=20)`
+- `locate_item(document_id, locator)`
+- `read_item(document_id, item_id)`
+- `replace_text(document_id, item_id, new_text, output_mode="versioned")`
+- `append_text(document_id, item_id, text_to_add, output_mode="versioned")`
+- `write_cell(document_id, sheet, cell, value, output_mode="versioned")`
+
+## Example query session
+
+![QUery session](./images/mcp-query.png)
+
 ## Item Id Reference
 
 Use these item-id formats with `read`, `replace`, and `append`:
@@ -339,6 +379,8 @@ Run the test suite with:
 uv run pytest
 ```
 
+This repository also includes an example skill for Office-document workflows at [`.github/skills/office-agent`](./.github/skills/office-agent/). The location is VSCode specific but it should work for Claude Code and Codex as well.  
+
 The test suite is written in `pytest` and includes:
 
 - configuration and diagnostics coverage
@@ -350,6 +392,7 @@ The test suite is written in `pytest` and includes:
 - XLSX adapter tests
 - XLSX service workflow tests
 - CLI round-trip tests for DOCX, PPTX, and XLSX
+- FastMCP stdio integration tests for the MCP tool surface
 
 ## Project Status
 
@@ -363,10 +406,12 @@ Implemented:
 - XLSX cell extraction and editing workflow
 - versioned write outputs with automatic reindex
 - stale-locator protection for write commands
+- MCP interface over stdio with FastMCP
 
 Not implemented yet:
 
-- MCP interface
+- SSE or streamable HTTP MCP transports
+- MCP resources and prompts
 - richer locator resolution beyond the current direct DOCX, PPTX, and XLSX flows
 
 

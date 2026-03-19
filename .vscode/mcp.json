@@ -1,0 +1,10 @@
+{
+	"servers": {
+		"office-agent": {
+			"type": "stdio",
+			"command": "uv",
+			"args": ["run", "office-agent", "mcp"]
+		}
+	},
+	"inputs": []
+}
