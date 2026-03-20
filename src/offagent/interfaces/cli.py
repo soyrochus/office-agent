@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import Annotated
 
+from offagent.app.progress import NullProgressReporter
 from offagent.app.services import (
     AppServices,
 )
@@ -102,17 +104,27 @@ def build_app():
         quiet: Annotated[bool, QUIET_OPTION] = False,
     ) -> None:
         services = AppServices(load_config(config))
-        _run_command(
-            lambda: emit_output(
+
+        def runner() -> None:
+            with _build_index_reporter(as_json=as_json, quiet=quiet) as reporter:
+                summary = services.index_path(
+                    path,
+                    with_embeddings=with_embeddings,
+                    reporter=reporter,
+                )
+            emit_output(
                 {
                     "path": path.resolve(),
-                    "summary": services.index_path(path, with_embeddings=with_embeddings),
+                    "summary": summary,
                 },
                 as_json=as_json,
                 quiet=quiet,
                 human_renderer=render_index_summary,
                 echo=typer.echo,
-            ),
+            )
+
+        _run_command(
+            runner,
             as_json=as_json,
             quiet=quiet,
         )
@@ -126,17 +138,27 @@ def build_app():
         quiet: Annotated[bool, QUIET_OPTION] = False,
     ) -> None:
         services = AppServices(load_config(config))
-        _run_command(
-            lambda: emit_output(
+
+        def runner() -> None:
+            with _build_index_reporter(as_json=as_json, quiet=quiet) as reporter:
+                summary = services.reindex_path(
+                    path,
+                    with_embeddings=with_embeddings,
+                    reporter=reporter,
+                )
+            emit_output(
                 {
                     "path": path.resolve(),
-                    "summary": services.reindex_path(path, with_embeddings=with_embeddings),
+                    "summary": summary,
                 },
                 as_json=as_json,
                 quiet=quiet,
                 human_renderer=render_index_summary,
                 echo=typer.echo,
-            ),
+            )
+
+        _run_command(
+            runner,
             as_json=as_json,
             quiet=quiet,
         )
@@ -385,3 +407,21 @@ def _run_command(callback, *, as_json: bool = False, quiet: bool = False):
 def _validate_output_flags(as_json: bool, quiet: bool) -> None:
     if as_json and quiet:
         raise InvalidArgumentsError("Choose either --json or --quiet, not both.")
+
+
+def _build_index_reporter(*, as_json: bool, quiet: bool):
+    if quiet or as_json or not _stderr_supports_live_progress():
+        return NullProgressReporter()
+    return _rich_progress_reporter_class()()
+
+
+def _stderr_supports_live_progress() -> bool:
+    return sys.stderr.isatty()
+
+
+def _rich_progress_reporter_class():
+    try:
+        from offagent.interfaces.cli_progress import RichProgressReporter
+    except ModuleNotFoundError as exc:
+        raise RuntimeError("Rich is required to render indexing progress. Install project dependencies first.") from exc
+    return RichProgressReporter

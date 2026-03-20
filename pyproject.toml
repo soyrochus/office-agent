@@ -16,6 +16,7 @@ dependencies = [
   "openpyxl>=3.1,<4",
   "pydantic>=2.0,<3",
   "python-dotenv>=1.0,<2",
+  "rich>=13,<14",
   "typer>=0.12,<1",
 ]
 

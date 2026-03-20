@@ -8,11 +8,12 @@ import os
 import sqlite3
 import struct
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable, Iterable, Literal, Sequence
 
 from offagent.adapters import docx_adapter, embedding_provider, pptx_adapter, xlsx_adapter
+from offagent.app.progress import NullProgressReporter, ProgressReporter
 from offagent.config import AppConfig
 from offagent.domain.models import DocumentRef, FileType, IndexedItem, ItemRef, SearchHit, SearchMode
 from offagent.errors import InvalidArgumentsError, NoEmbeddingsError, PolicyRefusedError, StaleLocatorError
@@ -47,6 +48,7 @@ REQUIRED_IMPORTS: tuple[tuple[str, str], ...] = (
     ("docx", "python-docx"),
     ("pptx", "python-pptx"),
     ("openpyxl", "openpyxl"),
+    ("rich", "Rich"),
 )
 
 OutputMode = Literal["versioned", "inplace"]
@@ -143,37 +145,71 @@ class AppServices:
     def resolve_document_path(self, document_id: str) -> Path:
         return self.get_document(document_id).path
 
-    def index_path(self, path: Path, *, with_embeddings: bool = False) -> IndexSummary:
+    def index_path(
+        self,
+        path: Path,
+        *,
+        with_embeddings: bool = False,
+        reporter: ProgressReporter | None = None,
+    ) -> IndexSummary:
         resolved_input = canonicalize_existing_path(path)
         self._ensure_allowed_document_path(resolved_input, action="index")
         candidates = _index_candidates(resolved_input)
+        active_reporter = reporter or NullProgressReporter()
         indexed = 0
         skipped = 0
 
-        for candidate in candidates:
+        active_reporter.on_index_start(len(candidates))
+        for index, candidate in enumerate(candidates, start=1):
             self._ensure_allowed_document_path(candidate, action="index")
             if candidate.suffix.lower() not in INDEXABLE_EXTENSIONS:
                 skipped += 1
                 continue
-            self.index_document(candidate, with_embeddings=with_embeddings)
+            active_reporter.on_file_start(candidate, index, len(candidates))
+            document_ref = self.index_document(
+                candidate,
+                with_embeddings=with_embeddings,
+                reporter=active_reporter,
+            )
+            active_reporter.on_file_done(candidate, items_indexed=document_ref.item_count or 0)
             indexed += 1
 
+        active_reporter.on_index_done(files_indexed=indexed, files_skipped=skipped)
         return IndexSummary(
             files_scanned=len(candidates),
             files_indexed=indexed,
             files_skipped=skipped,
         )
 
-    def reindex_path(self, path: Path, *, with_embeddings: bool = False) -> IndexSummary:
-        return self.index_path(path, with_embeddings=with_embeddings)
+    def reindex_path(
+        self,
+        path: Path,
+        *,
+        with_embeddings: bool = False,
+        reporter: ProgressReporter | None = None,
+    ) -> IndexSummary:
+        return self.index_path(path, with_embeddings=with_embeddings, reporter=reporter)
 
-    def refresh_document(self, document_id: str) -> IndexSummary:
-        return self.reindex_path(self.resolve_document_path(document_id))
+    def refresh_document(
+        self,
+        document_id: str,
+        *,
+        reporter: ProgressReporter | None = None,
+    ) -> IndexSummary:
+        return self.reindex_path(self.resolve_document_path(document_id), reporter=reporter)
 
-    def index_document(self, document_path: Path, *, with_embeddings: bool = False) -> DocumentRef:
+    def index_document(
+        self,
+        document_path: Path,
+        *,
+        with_embeddings: bool = False,
+        reporter: ProgressReporter | None = None,
+    ) -> DocumentRef:
+        active_reporter = reporter or NullProgressReporter()
         resolved_path, file_type = self._require_allowed_document_path(document_path, action="index")
         document_ref = _build_document_ref(resolved_path, file_type)
         items = _extract_items(resolved_path, file_type)
+        document_ref = replace(document_ref, item_count=len(items))
 
         connection = store.ensure_ready(self.config.index_path)
         try:
@@ -196,8 +232,12 @@ class AppServices:
                     resolved_path,
                     len(embedding_texts),
                 )
+                active_reporter.on_embedding_start(resolved_path, len(embedding_texts))
                 started_at = time.perf_counter()
-                blobs = provider.embed_texts(embedding_texts)
+                blobs = provider.embed_texts(
+                    embedding_texts,
+                    on_progress=active_reporter.on_embedding_item,
+                )
                 if len(blobs) != len(items):
                     raise RuntimeError("Embedding provider returned an unexpected number of vectors.")
                 store.replace_document_embeddings(

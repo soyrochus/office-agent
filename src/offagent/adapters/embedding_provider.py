@@ -4,6 +4,7 @@ import hashlib
 import math
 import re
 import struct
+from collections.abc import Callable
 from typing import Protocol
 
 try:
@@ -19,7 +20,12 @@ class EmbeddingProvider(Protocol):
     model_name: str
     dimensions: int
 
-    def embed_texts(self, texts: list[str]) -> list[bytes]:
+    def embed_texts(
+        self,
+        texts: list[str],
+        *,
+        on_progress: Callable[[int, int], None] | None = None,
+    ) -> list[bytes]:
         """Return one float32 blob per input text."""
 
 
@@ -36,10 +42,15 @@ class LocalEmbeddingProvider:
         self._backend = _build_backend(model_name, dimensions)
         self.dimensions = self._backend.dimensions
 
-    def embed_texts(self, texts: list[str]) -> list[bytes]:
+    def embed_texts(
+        self,
+        texts: list[str],
+        *,
+        on_progress: Callable[[int, int], None] | None = None,
+    ) -> list[bytes]:
         return [
             struct.pack(f"<{self.dimensions}f", *vector)
-            for vector in self._backend.embed(texts)
+            for vector in self._backend.embed(texts, on_progress=on_progress)
         ]
 
 
@@ -51,16 +62,38 @@ class _FastEmbedBackend:
         probe = next(self._model.embed(["probe"]))
         self.dimensions = len(probe)
 
-    def embed(self, texts: list[str]) -> list[list[float]]:
-        return [list(map(float, vector)) for vector in self._model.embed(texts)]
+    def embed(
+        self,
+        texts: list[str],
+        *,
+        on_progress: Callable[[int, int], None] | None = None,
+    ) -> list[list[float]]:
+        results: list[list[float]] = []
+        total = len(texts)
+        for index, vector in enumerate(self._model.embed(texts), start=1):
+            results.append(list(map(float, vector)))
+            if on_progress is not None:
+                on_progress(index, total)
+        return results
 
 
 class _HashingBackend:
     def __init__(self, dimensions: int) -> None:
         self.dimensions = dimensions
 
-    def embed(self, texts: list[str]) -> list[list[float]]:
-        return [_hash_text_to_unit_vector(text, self.dimensions) for text in texts]
+    def embed(
+        self,
+        texts: list[str],
+        *,
+        on_progress: Callable[[int, int], None] | None = None,
+    ) -> list[list[float]]:
+        results: list[list[float]] = []
+        total = len(texts)
+        for index, text in enumerate(texts, start=1):
+            results.append(_hash_text_to_unit_vector(text, self.dimensions))
+            if on_progress is not None:
+                on_progress(index, total)
+        return results
 
 
 def _build_backend(model_name: str, dimensions: int | None):
