@@ -1,5 +1,5 @@
 # Office-Agent
-[![Python](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/python-3.13+-blue.svg)](https://www.python.org/)
 [![MCP](https://img.shields.io/badge/MCP-Server-orange.svg)](https://gofastmcp.com/getting-started/welcome)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![FOSS Pluralism](https://img.shields.io/badge/FOSS-Pluralism-purple.svg)](FOSS_PLURALISM_MANIFESTO.md)
@@ -14,6 +14,7 @@ The project is being built incrementally. The current implementation includes:
 - project configuration and environment diagnostics
 - allowed-root and output-root path guards for read and write workflows
 - a local SQLite + FTS5 index
+- optional embedding-backed semantic and hybrid search over indexed items
 - DOCX paragraph extraction and indexing
 - DOCX search, locate, read, replace, and append operations
 - PPTX text-shape extraction and indexing
@@ -37,6 +38,8 @@ Current scope is intentionally narrow. DOCX, PPTX, and XLSX are the currently im
 - Office file discovery supports `.docx`, `.pptx`, and `.xlsx` roots at the base layer
 - allowed-root policy protects index, show, locate, read, and search-by-document workflows
 - output-root policy protects versioned and in-place write targets
+- optional embedding generation can be enabled during indexing and reindexing
+- search supports `keyword`, `semantic`, and `hybrid` modes; `keyword` remains the default
 - write commands default to versioned output files and automatic reindexing
 
 ### DOCX Workflow
@@ -69,6 +72,7 @@ PPTX indexing uses shape-level item ids in the form `slide:<n>:shape:<id>`. Only
 - index an `.xlsx` file or a directory of supported Office files
 - reindex a changed `.xlsx` file
 - search indexed workbook cell content through SQLite FTS5
+- generate contextual embedding text for indexed cells when embedding indexing is enabled
 - locate a cell directly by worksheet name and coordinate
 - read the current cell value or formula text from the source workbook
 - write one cell value directly with `write-cell`
@@ -84,6 +88,15 @@ XLSX indexing uses cell-level item ids in the form `sheet:<name>!<coordinate>`. 
 - exposed MCP tools are `index_documents`, `refresh_document`, `list_documents`, `search_documents`, `locate_item`, `read_item`, `replace_text`, `append_text`, and `write_cell`
 - MCP requests reuse the shared application configuration and service layer rather than duplicating document logic
 - MCP responses are structured, and expected service failures are returned as MCP tool errors
+
+### Vector Search
+
+- index and reindex can optionally generate one embedding per indexed item with `--with-embeddings`
+- embeddings are stored in SQLite sidecar tables keyed by the existing indexed item identity
+- semantic search embeds the query and compares it against stored vectors
+- hybrid search merges FTS hits and semantic hits with deterministic weighted ranking
+- search results include `match_mode` and per-source `scores` metadata in JSON and MCP output
+- `office-agent doctor` verifies embedding-provider importability, model loadability, and embedding-store consistency
 
 ## Installation
 
@@ -113,6 +126,11 @@ allowed_roots = ["./docs", "./edited"]
 output_directory = "./edited"
 output_roots = ["./edited", "./docs"]
 allow_inplace_overwrite = false
+embedding_model = "BAAI/bge-small-en-v1.5"
+embedding_dimensions = 384
+vector_search_top_k = 20
+hybrid_keyword_weight = 0.4
+hybrid_semantic_weight = 0.6
 ```
 
 Environment variables override file settings:
@@ -124,6 +142,11 @@ Environment variables override file settings:
 - `OFFAGENT_OUTPUT_DIRECTORY`
 - `OFFAGENT_OUTPUT_ROOTS`
 - `OFFAGENT_ALLOW_INPLACE_OVERWRITE`
+- `OFFAGENT_EMBEDDING_MODEL`
+- `OFFAGENT_EMBEDDING_DIMENSIONS`
+- `OFFAGENT_VECTOR_SEARCH_TOP_K`
+- `OFFAGENT_HYBRID_KEYWORD_WEIGHT`
+- `OFFAGENT_HYBRID_SEMANTIC_WEIGHT`
 
 `OFFAGENT_DOCUMENT_ROOTS` uses the platform path separator, for example `:` on macOS/Linux.
 
@@ -135,6 +158,11 @@ Configuration fields:
 - `output_directory`: optional directory for versioned write outputs; defaults to the source document directory
 - `output_roots`: canonical roots allowed for write outputs; if omitted and `output_directory` is set, this defaults to that directory
 - `allow_inplace_overwrite`: when `true`, write commands may use `--output-mode inplace`; default is `false`
+- `embedding_model`: embedding model name used when generating or querying vectors
+- `embedding_dimensions`: expected vector dimensionality for the configured model
+- `vector_search_top_k`: candidate pool size used by semantic and hybrid retrieval
+- `hybrid_keyword_weight`: keyword contribution to hybrid ranking
+- `hybrid_semantic_weight`: semantic contribution to hybrid ranking
 
 ## CLI
 
@@ -167,7 +195,7 @@ Common exit codes:
 
 ### Doctor
 
-Checks runtime health.
+Checks runtime health, including vector-search readiness.
 
 Options:
 
@@ -180,7 +208,7 @@ uv run office-agent doctor --config office-agent.toml
 
 ### Index And Reindex
 
-`index` indexes one file or all supported Office files under a directory. `reindex` currently re-runs the same indexing flow.
+`index` indexes one file or all supported Office files under a directory. `reindex` currently re-runs the same indexing flow. Add `--with-embeddings` to generate and persist embeddings during the run.
 
 Arguments:
 
@@ -188,21 +216,24 @@ Arguments:
 
 Options:
 
+- `--with-embeddings`: generate embeddings for indexed items during this run
 - `--config <path>`: optional config file path
 
 ```bash
 uv run office-agent index ./docs
+uv run office-agent index ./docs --with-embeddings
 uv run office-agent index ./docs/sample.docx
 uv run office-agent index ./docs/sample.pptx
 uv run office-agent index ./docs/sample.xlsx
 uv run office-agent reindex ./docs/sample.docx
+uv run office-agent reindex ./docs/sample.docx --with-embeddings
 uv run office-agent reindex ./docs/sample.pptx
 uv run office-agent reindex ./docs/sample.xlsx
 ```
 
 ### Search
 
-Searches indexed content through SQLite FTS5.
+Searches indexed content through SQLite FTS5, stored embeddings, or both.
 
 Arguments:
 
@@ -212,10 +243,13 @@ Options:
 
 - `--type <docx|pptx|xlsx>`: restrict search to one document type
 - `--doc <path>`: restrict search to one indexed document path
+- `--mode <keyword|semantic|hybrid>`: retrieval mode; default `keyword`
 - `--config <path>`: optional config file path
 
 ```bash
 uv run office-agent search "supplier shall"
+uv run office-agent search "supplier shall" --mode semantic
+uv run office-agent search "supplier shall" --mode hybrid --json
 uv run office-agent search "supplier shall" --type docx
 uv run office-agent search "supplier shall" --type pptx
 uv run office-agent search "supplier shall" --type xlsx
@@ -224,7 +258,12 @@ uv run office-agent search "supplier shall" --type pptx --doc ./docs/sample.pptx
 uv run office-agent search "supplier shall" --type xlsx --doc ./docs/sample.xlsx
 ```
 
-The current implementation returns item hits with item id, score, and preview text.
+Notes:
+
+- `keyword` behaves like the original FTS-only search path
+- `semantic` requires prior indexing with `--with-embeddings`
+- `hybrid` combines keyword and semantic candidates and returns merged ranking metadata
+- JSON output includes `match_mode` and `scores`; semantic and hybrid human-readable output also displays that metadata
 
 ### List
 
@@ -372,7 +411,7 @@ The MCP server exposes these tools:
 - `index_documents(paths)`
 - `refresh_document(document_id)`
 - `list_documents()`
-- `search_documents(query, file_type=None, document_id=None, limit=20)`
+- `search_documents(query, file_type=None, document_id=None, mode="keyword", limit=20)`
 - `locate_item(document_id, locator)`
 - `read_item(document_id, item_id)`
 - `replace_text(document_id, item_id, new_text, output_mode="versioned")`
@@ -447,6 +486,7 @@ Implemented:
 - configuration and doctor checks
 - allowed-root and output-root policy enforcement
 - SQLite index bootstrap and FTS5-backed search
+- embedding-backed semantic and hybrid retrieval with mode-aware CLI/MCP output
 - DOCX paragraph extraction and editing workflow
 - PPTX text-shape extraction and editing workflow
 - XLSX cell extraction and editing workflow
