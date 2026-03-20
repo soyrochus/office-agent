@@ -33,33 +33,61 @@ def extract_document(document_path: Path) -> list[IndexedItem]:
     items: list[IndexedItem] = []
 
     for worksheet in workbook.worksheets:
+        indexed_cells: list[tuple[object, str | None, str]] = []
+        row_contexts: dict[int, list[tuple[str, str]]] = {}
+        column_contexts: dict[int, list[tuple[str, str]]] = {}
+
         for row in worksheet.iter_rows():
             for cell in row:
                 if not _is_indexable_cell(cell):
                     continue
 
-                item_id = make_item_id(worksheet.title, cell.coordinate)
                 formula = _formula_text(cell)
                 display_text = _display_text(cell)
-                items.append(
-                    IndexedItem(
-                        item_id=item_id,
-                        item_type="cell",
-                        locator=item_id,
-                        preview=display_text[:120],
-                        content_text=display_text,
-                        metadata={
-                            "sheet_name": worksheet.title,
-                            "coordinate": cell.coordinate,
-                            "raw_value": cell.value,
-                            "formula": formula,
-                            "display_text": display_text,
-                            "data_type": cell.data_type,
-                        },
-                    )
+                indexed_cells.append((cell, formula, display_text))
+                row_contexts.setdefault(cell.row, []).append((cell.coordinate, display_text))
+                column_contexts.setdefault(cell.column, []).append((cell.coordinate, display_text))
+
+        for cell, formula, display_text in indexed_cells:
+            item_id = make_item_id(worksheet.title, cell.coordinate)
+            items.append(
+                IndexedItem(
+                    item_id=item_id,
+                    item_type="cell",
+                    locator=item_id,
+                    preview=display_text[:120],
+                    content_text=display_text,
+                    metadata={
+                        "sheet_name": worksheet.title,
+                        "coordinate": cell.coordinate,
+                        "raw_value": cell.value,
+                        "formula": formula,
+                        "display_text": display_text,
+                        "data_type": cell.data_type,
+                        "row_context": _context_text(row_contexts[cell.row], exclude=cell.coordinate),
+                        "column_context": _context_text(
+                            column_contexts[cell.column],
+                            exclude=cell.coordinate,
+                        ),
+                    },
                 )
+            )
 
     return items
+
+
+def build_embedding_text(item: IndexedItem, document_path: Path) -> str:
+    metadata = item.metadata
+    return "\n".join(
+        [
+            f"Workbook: {document_path.name}",
+            f"Sheet: {metadata.get('sheet_name', '')}",
+            f"Cell: {metadata.get('coordinate', '')}",
+            f"Row Context: {metadata.get('row_context', '')}",
+            f"Column Context: {metadata.get('column_context', '')}",
+            f"Value: {metadata.get('display_text', item.content_text)}",
+        ]
+    )
 
 
 def read_cell(document_path: Path, item_id: str) -> str:
@@ -176,6 +204,14 @@ def _normalize_coordinate(coordinate: str) -> str:
     except ValueError as exc:
         raise InvalidArgumentsError(f"Invalid XLSX cell coordinate: {coordinate}") from exc
     return normalized
+
+
+def _context_text(entries: list[tuple[str, str]], *, exclude: str) -> str:
+    return " | ".join(
+        display_text
+        for coordinate, display_text in entries
+        if coordinate != exclude and display_text
+    )
 
 
 def _target_path(document_path: Path, output_path: Path | None) -> Path:

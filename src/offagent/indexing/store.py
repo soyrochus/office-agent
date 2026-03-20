@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import datetime as dt
 import json
 import sqlite3
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Sequence
 
 from offagent.domain.models import DocumentRef, IndexedItem
 
@@ -43,6 +44,32 @@ CREATE VIRTUAL TABLE items_fts USING fts5(
 );
 """
 
+ITEM_EMBEDDINGS_SQL = """
+CREATE TABLE IF NOT EXISTS item_embeddings (
+    storage_id TEXT PRIMARY KEY REFERENCES items(storage_id),
+    model_name TEXT NOT NULL,
+    dimensions INTEGER NOT NULL,
+    embedding BLOB NOT NULL,
+    updated_at TEXT NOT NULL
+);
+"""
+
+EMBEDDING_META_SQL = """
+CREATE TABLE IF NOT EXISTS embedding_meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+"""
+
+EMBEDDING_META_KEYS = {
+    "model_name",
+    "dimensions",
+    "similarity_metric",
+    "schema_version",
+}
+EMBEDDING_SCHEMA_VERSION = "1"
+SIMILARITY_METRIC = "cosine"
+
 
 class StoreCapabilityError(RuntimeError):
     """Raised when the runtime cannot satisfy store requirements."""
@@ -71,6 +98,8 @@ def initialize_schema(connection: sqlite3.Connection) -> None:
 
     connection.executescript(DOCUMENTS_SQL)
     connection.executescript(ITEMS_SQL)
+    connection.executescript(ITEM_EMBEDDINGS_SQL)
+    connection.executescript(EMBEDDING_META_SQL)
     _migrate_documents_table(connection)
     _migrate_items_table(connection)
     _rebuild_items_fts(connection)
@@ -171,8 +200,6 @@ def replace_document_items(
             (storage_id, item.item_id, document_id, item.content_text),
         )
 
-    connection.commit()
-
 
 def fetch_document_by_path(connection: sqlite3.Connection, document_path: Path) -> sqlite3.Row | None:
     return connection.execute(
@@ -257,6 +284,7 @@ def search_items(
 ) -> list[sqlite3.Row]:
     sql = """
     SELECT
+        i.storage_id,
         i.document_id,
         i.item_id,
         i.item_type,
@@ -287,6 +315,158 @@ def search_items(
     params.append(limit)
 
     return list(connection.execute(sql, params).fetchall())
+
+
+def fetch_item_embeddings(
+    connection: sqlite3.Connection,
+    *,
+    file_type: str | None = None,
+    document_path: Path | None = None,
+) -> list[sqlite3.Row]:
+    sql = """
+    SELECT
+        e.storage_id,
+        e.model_name,
+        e.dimensions,
+        e.embedding,
+        e.updated_at,
+        i.document_id,
+        i.item_id,
+        i.item_type,
+        i.locator,
+        i.preview,
+        i.content_text,
+        i.metadata_json,
+        d.path,
+        d.display_name
+    FROM item_embeddings AS e
+    JOIN items AS i ON i.storage_id = e.storage_id
+    JOIN documents AS d ON d.document_id = i.document_id
+    WHERE d.is_active = 1
+    """
+    params: list[object] = []
+
+    if file_type is not None:
+        sql += " AND d.file_type = ?"
+        params.append(file_type)
+
+    if document_path is not None:
+        sql += " AND d.path = ?"
+        params.append(str(document_path.resolve()))
+
+    sql += " ORDER BY d.path, i.item_id"
+    return list(connection.execute(sql, params).fetchall())
+
+
+def has_item_embeddings(
+    connection: sqlite3.Connection,
+    *,
+    file_type: str | None = None,
+    document_path: Path | None = None,
+) -> bool:
+    sql = """
+    SELECT 1
+    FROM item_embeddings AS e
+    JOIN items AS i ON i.storage_id = e.storage_id
+    JOIN documents AS d ON d.document_id = i.document_id
+    WHERE d.is_active = 1
+    """
+    params: list[object] = []
+
+    if file_type is not None:
+        sql += " AND d.file_type = ?"
+        params.append(file_type)
+
+    if document_path is not None:
+        sql += " AND d.path = ?"
+        params.append(str(document_path.resolve()))
+
+    sql += " LIMIT 1"
+    return connection.execute(sql, params).fetchone() is not None
+
+
+def delete_document_embeddings(connection: sqlite3.Connection, document_id: str) -> None:
+    connection.execute(
+        """
+        DELETE FROM item_embeddings
+        WHERE storage_id LIKE ?
+        """,
+        (f"{document_id}:%",),
+    )
+
+
+def replace_document_embeddings(
+    connection: sqlite3.Connection,
+    *,
+    document_id: str,
+    model_name: str,
+    dimensions: int,
+    embeddings: Sequence[tuple[str, bytes]],
+) -> None:
+    delete_document_embeddings(connection, document_id)
+    updated_at = dt.datetime.now(dt.timezone.utc).isoformat()
+    for storage_id, embedding in embeddings:
+        connection.execute(
+            """
+            INSERT INTO item_embeddings (
+                storage_id,
+                model_name,
+                dimensions,
+                embedding,
+                updated_at
+            )
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (storage_id, model_name, dimensions, embedding, updated_at),
+        )
+
+
+def fetch_embedding_meta(connection: sqlite3.Connection) -> dict[str, str]:
+    return {
+        row["key"]: row["value"]
+        for row in connection.execute(
+            """
+            SELECT key, value
+            FROM embedding_meta
+            """
+        ).fetchall()
+    }
+
+
+def ensure_embedding_meta(
+    connection: sqlite3.Connection,
+    *,
+    model_name: str,
+    dimensions: int,
+) -> None:
+    expected = {
+        "model_name": model_name,
+        "dimensions": str(dimensions),
+        "similarity_metric": SIMILARITY_METRIC,
+        "schema_version": EMBEDDING_SCHEMA_VERSION,
+    }
+    existing = fetch_embedding_meta(connection)
+
+    if not existing:
+        for key, value in expected.items():
+            connection.execute(
+                """
+                INSERT INTO embedding_meta (key, value)
+                VALUES (?, ?)
+                """,
+                (key, value),
+            )
+        return
+
+    if set(existing) != EMBEDDING_META_KEYS:
+        raise RuntimeError("Stored embedding metadata is incomplete or unsupported.")
+
+    for key, expected_value in expected.items():
+        actual_value = existing.get(key)
+        if actual_value != expected_value:
+            raise RuntimeError(
+                f"Embedding metadata mismatch for {key}: expected {expected_value}, found {actual_value}."
+            )
 
 
 def _migrate_documents_table(connection: sqlite3.Connection) -> None:

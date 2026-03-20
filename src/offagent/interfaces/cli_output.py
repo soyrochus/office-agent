@@ -62,9 +62,15 @@ def render_search_hits(hits: Sequence[SearchHit]) -> str:
         return "No matches found."
     lines: list[str] = []
     for hit in hits:
+        mode = f"\tmode={hit.match_mode}" if hit.match_mode is not None else ""
         lines.append(
-            f"{hit.item_id}\tscore={hit.score:.3f}\tdoc={hit.display_name or hit.document_path}"
+            f"{hit.item_id}\tscore={hit.score:.3f}{mode}\tdoc={hit.display_name or hit.document_path}"
         )
+        if hit.scores:
+            score_parts = ", ".join(
+                f"{name}={value:.3f}" for name, value in sorted(hit.scores.items())
+            )
+            lines.append(f"scores: {score_parts}")
         lines.append(hit.preview)
     return "\n".join(lines)
 

@@ -23,6 +23,8 @@ def test_ensure_ready_creates_expected_schema(tmp_path) -> None:
     assert "documents" in table_names
     assert "items" in table_names
     assert "items_fts" in table_names
+    assert "item_embeddings" in table_names
+    assert "embedding_meta" in table_names
 
 
 def test_initialize_schema_raises_without_fts5_support(monkeypatch) -> None:

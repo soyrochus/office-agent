@@ -24,6 +24,8 @@ document_roots = ["{docs_dir.as_posix()}"]
 allowed_roots = ["{docs_dir.as_posix()}"]
 output_directory = "{output_dir.as_posix()}"
 output_roots = ["{output_dir.as_posix()}", "{docs_dir.as_posix()}"]
+embedding_model = "hash://parity"
+embedding_dimensions = 48
 """.strip()
     )
     return config_path

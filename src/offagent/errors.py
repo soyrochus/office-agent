@@ -23,3 +23,7 @@ class PolicyRefusedError(OffagentError):
 
 class StaleLocatorError(TargetNotFoundError):
     """Raised when a previously indexed target no longer resolves safely."""
+
+
+class NoEmbeddingsError(TargetNotFoundError):
+    """Raised when semantic retrieval is requested without indexed embeddings."""

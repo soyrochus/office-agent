@@ -106,6 +106,7 @@ def build_mcp_server(config: AppConfig):
         query: str,
         file_type: str | None = None,
         document_id: str | None = None,
+        mode: str = "keyword",
         limit: int = 20,
     ) -> SearchDocumentsResult:
         request = SearchDocumentsRequest.model_validate(
@@ -113,6 +114,7 @@ def build_mcp_server(config: AppConfig):
                 "query": query,
                 "file_type": file_type,
                 "document_id": document_id,
+                "mode": mode,
                 "limit": limit,
             }
         )
@@ -126,6 +128,7 @@ def build_mcp_server(config: AppConfig):
                 file_type=request.file_type,
                 document_path=document_path,
                 limit=request.limit,
+                mode=request.mode,
             )
             return SearchDocumentsResult.from_hits(hits)
 

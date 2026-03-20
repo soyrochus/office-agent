@@ -36,6 +36,8 @@ def config_path(tmp_path) -> Path:
 [offagent]
 index_path = "{(tmp_path / 'state' / 'index.sqlite3').as_posix()}"
 document_roots = ["{tmp_path.as_posix()}"]
+embedding_model = "hash://test"
+embedding_dimensions = 48
 """.strip()
     )
     return path
@@ -134,6 +136,8 @@ document_roots = ["{docs_dir.as_posix()}"]
 allowed_roots = ["{docs_dir.as_posix()}"]
 output_directory = "{output_dir.as_posix()}"
 output_roots = ["{output_dir.as_posix()}", "{docs_dir.as_posix()}"]
+embedding_model = "hash://golden"
+embedding_dimensions = 48
 """.strip()
     )
     return path

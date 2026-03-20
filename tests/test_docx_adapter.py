@@ -29,3 +29,9 @@ def test_append_updates_empty_paragraph(sample_docx) -> None:
 
     document = Document(str(sample_docx))
     assert document.paragraphs[2].text == "Filled later."
+
+
+def test_build_embedding_text_returns_paragraph_content(sample_docx) -> None:
+    item = docx_adapter.extract_document(sample_docx)[3]
+
+    assert docx_adapter.build_embedding_text(item, sample_docx) == item.content_text

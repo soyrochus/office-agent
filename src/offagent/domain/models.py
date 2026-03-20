@@ -6,6 +6,8 @@ from typing import Any, Literal
 
 FileType = Literal["docx", "pptx", "xlsx"]
 OperationType = Literal["replace_text", "append_text", "write_value"]
+SearchMode = Literal["keyword", "semantic", "hybrid"]
+MatchMode = Literal["keyword", "semantic", "hybrid"]
 
 
 @dataclass(frozen=True)
@@ -41,6 +43,8 @@ class SearchHit:
     preview: str
     document_path: Path | None = None
     display_name: str | None = None
+    match_mode: MatchMode | None = None
+    scores: dict[str, float] | None = None
 
 
 @dataclass(frozen=True)

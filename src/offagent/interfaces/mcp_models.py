@@ -6,7 +6,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from offagent.app.services import IndexSummary, OutputMode, PatchResult
-from offagent.domain.models import DocumentRef, FileType, ItemRef, SearchHit
+from offagent.domain.models import DocumentRef, FileType, ItemRef, SearchHit, SearchMode
 
 
 class MCPModel(BaseModel):
@@ -65,6 +65,8 @@ class SearchHitModel(MCPModel):
     preview: str
     document_path: str | None = None
     display_name: str | None = None
+    match_mode: str | None = None
+    scores: dict[str, float] | None = None
 
     @classmethod
     def from_search_hit(cls, hit: SearchHit) -> "SearchHitModel":
@@ -78,6 +80,8 @@ class SearchHitModel(MCPModel):
             preview=hit.preview,
             document_path=None if hit.document_path is None else str(hit.document_path),
             display_name=hit.display_name,
+            match_mode=hit.match_mode,
+            scores=hit.scores,
         )
 
 
@@ -187,6 +191,7 @@ class SearchDocumentsRequest(MCPModel):
     query: str = Field(min_length=1)
     file_type: FileType | None = None
     document_id: str | None = None
+    mode: SearchMode = "keyword"
     limit: int = Field(default=20, ge=1, le=100)
 
 

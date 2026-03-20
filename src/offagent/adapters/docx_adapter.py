@@ -54,6 +54,11 @@ def extract_document(document_path: Path) -> list[IndexedItem]:
     return items
 
 
+def build_embedding_text(item: IndexedItem, document_path: Path) -> str:
+    del document_path
+    return item.content_text
+
+
 def read_paragraph(document_path: Path, item_id: str) -> str:
     paragraph = _resolve_paragraph(_open_document(document_path), item_id)
     return paragraph.text

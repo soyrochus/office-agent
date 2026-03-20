@@ -13,6 +13,8 @@ def test_doctor_reports_pass_for_bootstrap_checks(tmp_path) -> None:
     config = AppConfig(
         index_path=tmp_path / "state" / "index.sqlite3",
         document_roots=(document_root,),
+        embedding_model="hash://doctor",
+        embedding_dimensions=32,
     )
 
     report = AppServices(config).run_doctor(
@@ -21,6 +23,7 @@ def test_doctor_reports_pass_for_bootstrap_checks(tmp_path) -> None:
 
     assert report.ok
     assert "All checks passed." in format_doctor_report(report)
+    assert any(check.name == "Embedding Model" and check.ok for check in report.checks)
 
 
 def test_cli_doctor_subcommand_runs(tmp_path) -> None:
@@ -32,6 +35,8 @@ def test_cli_doctor_subcommand_runs(tmp_path) -> None:
 [offagent]
 index_path = "{(tmp_path / 'state' / 'index.sqlite3').as_posix()}"
 document_roots = ["{document_root.as_posix()}"]
+embedding_model = "hash://doctor"
+embedding_dimensions = 32
 """.strip()
     )
 
@@ -52,3 +57,4 @@ document_roots = ["{document_root.as_posix()}"]
     assert result.returncode == 0, result.stderr
     assert "Doctor Report" in result.stdout
     assert "[PASS] SQLite" in result.stdout
+    assert "[PASS] Embedding Model" in result.stdout

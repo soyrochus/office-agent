@@ -28,3 +28,9 @@ def test_extract_document_excludes_non_text_shapes(sample_pptx) -> None:
     table_item_id = pptx_adapter.make_item_id(1, table_shape.shape_id)
 
     assert table_item_id not in {item.item_id for item in items}
+
+
+def test_build_embedding_text_returns_shape_content(sample_pptx) -> None:
+    item = pptx_adapter.extract_document(sample_pptx)[0]
+
+    assert pptx_adapter.build_embedding_text(item, sample_pptx) == item.content_text

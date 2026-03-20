@@ -96,6 +96,7 @@ def build_app():
     @app.command("index")
     def index_command(
         path: Path,
+        with_embeddings: Annotated[bool, typer.Option("--with-embeddings")] = False,
         config: Annotated[Path | None, CONFIG_OPTION] = None,
         as_json: Annotated[bool, JSON_OPTION] = False,
         quiet: Annotated[bool, QUIET_OPTION] = False,
@@ -103,7 +104,10 @@ def build_app():
         services = AppServices(load_config(config))
         _run_command(
             lambda: emit_output(
-                {"path": path.resolve(), "summary": services.index_path(path)},
+                {
+                    "path": path.resolve(),
+                    "summary": services.index_path(path, with_embeddings=with_embeddings),
+                },
                 as_json=as_json,
                 quiet=quiet,
                 human_renderer=render_index_summary,
@@ -116,6 +120,7 @@ def build_app():
     @app.command("reindex")
     def reindex_command(
         path: Path,
+        with_embeddings: Annotated[bool, typer.Option("--with-embeddings")] = False,
         config: Annotated[Path | None, CONFIG_OPTION] = None,
         as_json: Annotated[bool, JSON_OPTION] = False,
         quiet: Annotated[bool, QUIET_OPTION] = False,
@@ -123,7 +128,10 @@ def build_app():
         services = AppServices(load_config(config))
         _run_command(
             lambda: emit_output(
-                {"path": path.resolve(), "summary": services.reindex_path(path)},
+                {
+                    "path": path.resolve(),
+                    "summary": services.reindex_path(path, with_embeddings=with_embeddings),
+                },
                 as_json=as_json,
                 quiet=quiet,
                 human_renderer=render_index_summary,
@@ -138,6 +146,7 @@ def build_app():
         query: str,
         file_type: Annotated[str | None, typer.Option("--type")] = None,
         doc: Annotated[Path | None, typer.Option("--doc")] = None,
+        mode: Annotated[str, typer.Option("--mode")] = "keyword",
         config: Annotated[Path | None, CONFIG_OPTION] = None,
         as_json: Annotated[bool, JSON_OPTION] = False,
         quiet: Annotated[bool, QUIET_OPTION] = False,
@@ -145,7 +154,12 @@ def build_app():
         services = AppServices(load_config(config))
 
         def runner() -> None:
-            hits = services.search_corpus(query, file_type=file_type, document_path=doc)
+            hits = services.search_corpus(
+                query,
+                file_type=file_type,
+                document_path=doc,
+                mode=mode,
+            )
             emit_output(
                 {"hits": hits},
                 as_json=as_json,

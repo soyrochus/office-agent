@@ -59,6 +59,11 @@ def extract_document(document_path: Path) -> list[IndexedItem]:
     return items
 
 
+def build_embedding_text(item: IndexedItem, document_path: Path) -> str:
+    del document_path
+    return item.content_text
+
+
 def read_text_shape(document_path: Path, item_id: str) -> str:
     resolved = resolve_shape(document_path, item_id)
     return resolved.text

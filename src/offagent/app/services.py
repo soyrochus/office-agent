@@ -3,16 +3,19 @@ from __future__ import annotations
 import hashlib
 import importlib
 import json
+import logging
 import os
 import sqlite3
-from dataclasses import dataclass
+import struct
+import time
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, Literal, Sequence
+from typing import Callable, Iterable, Literal, Sequence
 
-from offagent.adapters import docx_adapter, pptx_adapter, xlsx_adapter
+from offagent.adapters import docx_adapter, embedding_provider, pptx_adapter, xlsx_adapter
 from offagent.config import AppConfig
-from offagent.domain.models import DocumentRef, FileType, ItemRef, SearchHit
-from offagent.errors import InvalidArgumentsError, PolicyRefusedError, StaleLocatorError
+from offagent.domain.models import DocumentRef, FileType, IndexedItem, ItemRef, SearchHit, SearchMode
+from offagent.errors import InvalidArgumentsError, NoEmbeddingsError, PolicyRefusedError, StaleLocatorError
 from offagent.errors import TargetNotFoundError
 from offagent.indexing import store
 from offagent.path_policy import (
@@ -22,6 +25,8 @@ from offagent.path_policy import (
     normalize_roots,
 )
 from offagent.storage import versioning
+
+LOGGER = logging.getLogger(__name__)
 
 SUPPORTED_EXTENSIONS: dict[str, FileType] = {
     ".docx": "docx",
@@ -81,6 +86,15 @@ class PatchResult:
 @dataclass
 class AppServices:
     config: AppConfig
+    embedding_provider_factory: Callable[
+        [str, int | None],
+        embedding_provider.EmbeddingProvider,
+    ] | None = None
+    _embedding_provider: embedding_provider.EmbeddingProvider | None = field(
+        default=None,
+        init=False,
+        repr=False,
+    )
 
     def discover_documents(self) -> list[DocumentRef]:
         documents = discover_documents(self.config.document_roots)
@@ -129,7 +143,7 @@ class AppServices:
     def resolve_document_path(self, document_id: str) -> Path:
         return self.get_document(document_id).path
 
-    def index_path(self, path: Path) -> IndexSummary:
+    def index_path(self, path: Path, *, with_embeddings: bool = False) -> IndexSummary:
         resolved_input = canonicalize_existing_path(path)
         self._ensure_allowed_document_path(resolved_input, action="index")
         candidates = _index_candidates(resolved_input)
@@ -141,7 +155,7 @@ class AppServices:
             if candidate.suffix.lower() not in INDEXABLE_EXTENSIONS:
                 skipped += 1
                 continue
-            self.index_document(candidate)
+            self.index_document(candidate, with_embeddings=with_embeddings)
             indexed += 1
 
         return IndexSummary(
@@ -150,13 +164,13 @@ class AppServices:
             files_skipped=skipped,
         )
 
-    def reindex_path(self, path: Path) -> IndexSummary:
-        return self.index_path(path)
+    def reindex_path(self, path: Path, *, with_embeddings: bool = False) -> IndexSummary:
+        return self.index_path(path, with_embeddings=with_embeddings)
 
     def refresh_document(self, document_id: str) -> IndexSummary:
         return self.reindex_path(self.resolve_document_path(document_id))
 
-    def index_document(self, document_path: Path) -> DocumentRef:
+    def index_document(self, document_path: Path, *, with_embeddings: bool = False) -> DocumentRef:
         resolved_path, file_type = self._require_allowed_document_path(document_path, action="index")
         document_ref = _build_document_ref(resolved_path, file_type)
         items = _extract_items(resolved_path, file_type)
@@ -164,7 +178,48 @@ class AppServices:
         connection = store.ensure_ready(self.config.index_path)
         try:
             store.upsert_document(connection, document_ref)
+            store.delete_document_embeddings(connection, document_ref.document_id)
             store.replace_document_items(connection, document_ref.document_id, items)
+            if with_embeddings and items:
+                provider = self._get_embedding_provider()
+                store.ensure_embedding_meta(
+                    connection,
+                    model_name=provider.model_name,
+                    dimensions=provider.dimensions,
+                )
+                embedding_texts = [
+                    _build_embedding_text(item, resolved_path, file_type=file_type)
+                    for item in items
+                ]
+                LOGGER.info(
+                    "Embedding generation started for %s with %s items",
+                    resolved_path,
+                    len(embedding_texts),
+                )
+                started_at = time.perf_counter()
+                blobs = provider.embed_texts(embedding_texts)
+                if len(blobs) != len(items):
+                    raise RuntimeError("Embedding provider returned an unexpected number of vectors.")
+                store.replace_document_embeddings(
+                    connection,
+                    document_id=document_ref.document_id,
+                    model_name=provider.model_name,
+                    dimensions=provider.dimensions,
+                    embeddings=[
+                        (store.make_storage_id(document_ref.document_id, item.item_id), blob)
+                        for item, blob in zip(items, blobs, strict=True)
+                    ],
+                )
+                LOGGER.info(
+                    "Embedding generation completed for %s with %s items in %.3fs",
+                    resolved_path,
+                    len(embedding_texts),
+                    time.perf_counter() - started_at,
+                )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
         finally:
             connection.close()
 
@@ -177,28 +232,77 @@ class AppServices:
         file_type: str | None = None,
         document_path: Path | None = None,
         limit: int = 20,
+        mode: SearchMode = "keyword",
     ) -> list[SearchHit]:
         if file_type not in (None, "docx", "pptx", "xlsx"):
             raise InvalidArgumentsError(
                 "Only DOCX, PPTX, and XLSX search are supported in this feature."
             )
+        normalized_mode = _normalize_search_mode(mode)
 
         resolved_document_path = None
         if document_path is not None:
             resolved_document_path, _ = self._require_allowed_document_path(document_path, action="search")
         connection = store.ensure_ready(self.config.index_path)
         try:
-            rows = store.search_items(
-                connection,
-                query,
-                file_type=file_type,
-                document_path=resolved_document_path,
-                limit=limit,
-            )
+            if normalized_mode == "keyword":
+                rows = store.search_items(
+                    connection,
+                    query,
+                    file_type=file_type,
+                    document_path=resolved_document_path,
+                    limit=limit,
+                )
+                hits = [_search_hit_from_keyword_row(row) for row in rows]
+            elif normalized_mode == "semantic":
+                if not store.has_item_embeddings(
+                    connection,
+                    file_type=file_type,
+                    document_path=resolved_document_path,
+                ):
+                    raise NoEmbeddingsError(
+                        "No embeddings are indexed for the requested corpus. Reindex with --with-embeddings first."
+                    )
+                hits = self._semantic_search(
+                    connection,
+                    query,
+                    file_type=file_type,
+                    document_path=resolved_document_path,
+                    limit=max(limit, self.config.vector_search_top_k),
+                )[:limit]
+            else:
+                keyword_rows = store.search_items(
+                    connection,
+                    query,
+                    file_type=file_type,
+                    document_path=resolved_document_path,
+                    limit=max(limit, self.config.vector_search_top_k),
+                )
+                semantic_hits = self._semantic_search(
+                    connection,
+                    query,
+                    file_type=file_type,
+                    document_path=resolved_document_path,
+                    limit=max(limit, self.config.vector_search_top_k),
+                    require_embeddings=False,
+                )
+                hits = _merge_hybrid_hits(
+                    keyword_rows,
+                    semantic_hits,
+                    limit=limit,
+                    keyword_weight=self.config.hybrid_keyword_weight,
+                    semantic_weight=self.config.hybrid_semantic_weight,
+                )
+                LOGGER.info(
+                    "Hybrid merge completed for query=%r with %s keyword hits, %s semantic hits, %s merged hits",
+                    query,
+                    len(keyword_rows),
+                    len(semantic_hits),
+                    len(hits),
+                )
         finally:
             connection.close()
 
-        hits = [_search_hit_from_row(row) for row in rows]
         return [
             hit
             for hit in hits
@@ -520,11 +624,93 @@ class AppServices:
         checks.append(_check_sqlite_module())
         checks.append(_check_fts5_support())
         checks.append(_check_index_path(self.config.index_path))
+        checks.append(_check_embedding_provider_import())
+        checks.append(
+            _check_embedding_model(
+                self.config.embedding_model,
+                self.config.embedding_dimensions,
+                provider_factory=self.embedding_provider_factory,
+            )
+        )
+        checks.append(
+            _check_embedding_store(
+                self.config.index_path,
+                self.config.embedding_model,
+                self.config.embedding_dimensions,
+            )
+        )
         checks.extend(_check_document_roots(self.config.document_roots))
         checks.extend(_check_allowed_roots(self.config.allowed_roots))
         checks.extend(_check_output_roots(self.config.output_roots))
 
         return DoctorReport(checks=tuple(checks))
+
+    def _semantic_search(
+        self,
+        connection: sqlite3.Connection,
+        query: str,
+        *,
+        file_type: str | None,
+        document_path: Path | None,
+        limit: int,
+        require_embeddings: bool = True,
+    ) -> list[SearchHit]:
+        rows = store.fetch_item_embeddings(
+            connection,
+            file_type=file_type,
+            document_path=document_path,
+        )
+        if not rows:
+            if require_embeddings:
+                raise NoEmbeddingsError(
+                    "No embeddings are indexed for the requested corpus. Reindex with --with-embeddings first."
+                )
+            return []
+
+        provider = self._get_embedding_provider()
+        store.ensure_embedding_meta(
+            connection,
+            model_name=provider.model_name,
+            dimensions=provider.dimensions,
+        )
+        query_vector = _unpack_embedding(provider.embed_texts([query])[0], provider.dimensions)
+
+        scored_hits: list[SearchHit] = []
+        for row in rows:
+            similarity = _cosine_similarity(
+                query_vector,
+                _unpack_embedding(row["embedding"], int(row["dimensions"])),
+            )
+            scored_hits.append(_search_hit_from_semantic_row(row, similarity))
+
+        scored_hits.sort(
+            key=lambda hit: (
+                -hit.score,
+                str(hit.document_path),
+                hit.item_id,
+            )
+        )
+        LOGGER.info(
+            "Semantic search executed for query=%r top_k=%s hit_count=%s",
+            query,
+            limit,
+            min(len(scored_hits), limit),
+        )
+        return scored_hits[:limit]
+
+    def _get_embedding_provider(self) -> embedding_provider.EmbeddingProvider:
+        if self._embedding_provider is None:
+            factory = self.embedding_provider_factory or (
+                lambda model_name, dimensions: embedding_provider.LocalEmbeddingProvider(
+                    model_name=model_name,
+                    dimensions=dimensions,
+                )
+            )
+            self._embedding_provider = factory(
+                self.config.embedding_model,
+                self.config.embedding_dimensions,
+            )
+        return self._embedding_provider
 
     def _require_allowed_document_path(
         self,
@@ -695,7 +881,7 @@ def _extract_items(document_path: Path, file_type: FileType):
     raise InvalidArgumentsError(f"Unsupported indexable file type: {file_type}")
 
 
-def _search_hit_from_row(row: sqlite3.Row) -> SearchHit:
+def _search_hit_from_keyword_row(row: sqlite3.Row) -> SearchHit:
     return SearchHit(
         document_id=row["document_id"],
         item_id=row["item_id"],
@@ -706,6 +892,23 @@ def _search_hit_from_row(row: sqlite3.Row) -> SearchHit:
         preview=row["preview"],
         document_path=Path(row["path"]),
         display_name=row["display_name"],
+        match_mode="keyword",
+    )
+
+
+def _search_hit_from_semantic_row(row: sqlite3.Row, similarity: float) -> SearchHit:
+    return SearchHit(
+        document_id=row["document_id"],
+        item_id=row["item_id"],
+        score=similarity,
+        matched_text=row["content_text"],
+        locator=row["locator"],
+        item_type=row["item_type"],
+        preview=row["preview"],
+        document_path=Path(row["path"]),
+        display_name=row["display_name"],
+        match_mode="semantic",
+        scores={"semantic": similarity, "final": similarity},
     )
 
 
@@ -738,6 +941,13 @@ def _metadata_value(row: sqlite3.Row, key: str, *, default=None):
     return metadata.get(key, default)
 
 
+def _normalize_search_mode(mode: str) -> SearchMode:
+    normalized = mode.strip().lower()
+    if normalized not in {"keyword", "semantic", "hybrid"}:
+        raise InvalidArgumentsError(f"Unsupported search mode: {mode}")
+    return normalized  # type: ignore[return-value]
+
+
 def _normalize_output_mode(output_mode: str) -> OutputMode:
     normalized = output_mode.strip().lower()
     if normalized not in {"versioned", "inplace"}:
@@ -747,6 +957,96 @@ def _normalize_output_mode(output_mode: str) -> OutputMode:
 
 def _content_hash(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _build_embedding_text(item: IndexedItem, document_path: Path, *, file_type: FileType) -> str:
+    if file_type == "docx":
+        return docx_adapter.build_embedding_text(item, document_path)
+    if file_type == "pptx":
+        return pptx_adapter.build_embedding_text(item, document_path)
+    if file_type == "xlsx":
+        return xlsx_adapter.build_embedding_text(item, document_path)
+    raise InvalidArgumentsError(f"Unsupported embedding text type: {file_type}")
+
+
+def _unpack_embedding(blob: bytes, dimensions: int) -> list[float]:
+    expected_length = dimensions * 4
+    if len(blob) != expected_length:
+        raise RuntimeError(
+            f"Embedding blob length {len(blob)} does not match expected size {expected_length}."
+        )
+    return list(struct.unpack(f"<{dimensions}f", blob))
+
+
+def _cosine_similarity(left: Sequence[float], right: Sequence[float]) -> float:
+    if len(left) != len(right):
+        raise RuntimeError("Embedding vectors must have the same dimensionality.")
+    return float(sum(a * b for a, b in zip(left, right)))
+
+
+def _rank_scores(storage_ids: Sequence[str]) -> dict[str, float]:
+    return {
+        storage_id: 1.0 / rank
+        for rank, storage_id in enumerate(storage_ids, start=1)
+    }
+
+
+def _merge_hybrid_hits(
+    keyword_rows: Sequence[sqlite3.Row],
+    semantic_hits: Sequence[SearchHit],
+    *,
+    limit: int,
+    keyword_weight: float,
+    semantic_weight: float,
+) -> list[SearchHit]:
+    keyword_by_storage = {row["storage_id"]: row for row in keyword_rows}
+    semantic_by_storage = {
+        f"{hit.document_id}:{hit.item_id}": hit
+        for hit in semantic_hits
+    }
+    keyword_rank_scores = _rank_scores([row["storage_id"] for row in keyword_rows])
+    semantic_rank_scores = _rank_scores(
+        [f"{hit.document_id}:{hit.item_id}" for hit in semantic_hits]
+    )
+
+    merged: list[SearchHit] = []
+    for storage_id in sorted(set(keyword_by_storage) | set(semantic_by_storage)):
+        keyword_row = keyword_by_storage.get(storage_id)
+        semantic_hit = semantic_by_storage.get(storage_id)
+        base_hit = semantic_hit if semantic_hit is not None else _search_hit_from_keyword_row(keyword_row)  # type: ignore[arg-type]
+        keyword_score = keyword_rank_scores.get(storage_id, 0.0)
+        semantic_score = semantic_rank_scores.get(storage_id, 0.0)
+        final_score = (keyword_weight * keyword_score) + (semantic_weight * semantic_score)
+        merged.append(
+            SearchHit(
+                document_id=base_hit.document_id,
+                item_id=base_hit.item_id,
+                score=final_score,
+                matched_text=base_hit.matched_text,
+                locator=base_hit.locator,
+                item_type=base_hit.item_type,
+                preview=base_hit.preview,
+                document_path=base_hit.document_path,
+                display_name=base_hit.display_name,
+                match_mode="hybrid",
+                scores={
+                    "keyword": keyword_score,
+                    "semantic": semantic_score,
+                    "final": final_score,
+                },
+            )
+        )
+
+    merged.sort(
+        key=lambda hit: (
+            -hit.score,
+            -(hit.scores or {}).get("semantic", 0.0),
+            -(hit.scores or {}).get("keyword", 0.0),
+            str(hit.document_path),
+            hit.item_id,
+        )
+    )
+    return merged[:limit]
 
 
 def _ensure_current_target_resolves(document_path: Path, file_type: FileType, item_id: str) -> None:
@@ -792,6 +1092,59 @@ def _check_fts5_support() -> DoctorCheck:
         return DoctorCheck("SQLite FTS5", False, "FTS5 virtual tables are unavailable.")
     finally:
         connection.close()
+
+
+def _check_embedding_provider_import() -> DoctorCheck:
+    try:
+        importlib.import_module("offagent.adapters.embedding_provider")
+    except Exception as exc:
+        return DoctorCheck("Embedding Provider", False, f"Import failed: {exc}")
+    return DoctorCheck("Embedding Provider", True, "Import succeeded.")
+
+
+def _check_embedding_model(
+    model_name: str,
+    dimensions: int,
+    *,
+    provider_factory: Callable[[str, int | None], embedding_provider.EmbeddingProvider] | None = None,
+) -> DoctorCheck:
+    try:
+        factory = provider_factory or (
+            lambda selected_model, selected_dimensions: embedding_provider.LocalEmbeddingProvider(
+                model_name=selected_model,
+                dimensions=selected_dimensions,
+            )
+        )
+        provider = factory(model_name, dimensions)
+    except Exception as exc:
+        return DoctorCheck("Embedding Model", False, f"Model load failed: {exc}")
+    return DoctorCheck(
+        "Embedding Model",
+        True,
+        f"Loaded {provider.model_name} with {provider.dimensions} dimensions.",
+    )
+
+
+def _check_embedding_store(index_path: Path, model_name: str, dimensions: int) -> DoctorCheck:
+    try:
+        connection = store.ensure_ready(index_path)
+    except (OSError, sqlite3.Error, store.StoreCapabilityError) as exc:
+        return DoctorCheck("Embedding Store", False, f"Store check failed: {exc}")
+
+    try:
+        meta = store.fetch_embedding_meta(connection)
+        if not meta:
+            return DoctorCheck("Embedding Store", True, "Embedding sidecar tables are ready.")
+        store.ensure_embedding_meta(
+            connection,
+            model_name=model_name,
+            dimensions=dimensions,
+        )
+    except Exception as exc:
+        return DoctorCheck("Embedding Store", False, f"Metadata check failed: {exc}")
+    finally:
+        connection.close()
+    return DoctorCheck("Embedding Store", True, "Embedding tables and metadata are consistent.")
 
 
 def _check_index_path(index_path: Path) -> DoctorCheck:
