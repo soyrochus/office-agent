@@ -71,6 +71,11 @@ def render_search_hits(hits: Sequence[SearchHit]) -> str:
                 f"{name}={value:.3f}" for name, value in sorted(hit.scores.items())
             )
             lines.append(f"scores: {score_parts}")
+        if hit.metadata:
+            metadata_parts = ", ".join(
+                f"{name}={value}" for name, value in sorted(hit.metadata.items())
+            )
+            lines.append(f"metadata: {metadata_parts}")
         lines.append(hit.preview)
     return "\n".join(lines)
 

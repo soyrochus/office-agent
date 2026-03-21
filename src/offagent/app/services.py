@@ -15,7 +15,15 @@ from typing import Callable, Iterable, Literal, Sequence
 from offagent.adapters import docx_adapter, embedding_provider, pptx_adapter, xlsx_adapter
 from offagent.app.progress import NullProgressReporter, ProgressReporter
 from offagent.config import AppConfig
-from offagent.domain.models import DocumentRef, FileType, IndexedItem, ItemRef, SearchHit, SearchMode
+from offagent.domain.models import (
+    DocumentRef,
+    FileType,
+    IndexedItem,
+    ItemRef,
+    SearchHit,
+    SearchMode,
+    XlsxRowEmbedding,
+)
 from offagent.errors import InvalidArgumentsError, NoEmbeddingsError, PolicyRefusedError, StaleLocatorError
 from offagent.errors import TargetNotFoundError
 from offagent.indexing import store
@@ -223,39 +231,64 @@ class AppServices:
                     model_name=provider.model_name,
                     dimensions=provider.dimensions,
                 )
-                embedding_texts = [
-                    _build_embedding_text(item, resolved_path, file_type=file_type)
-                    for item in items
-                ]
+                if file_type == "xlsx":
+                    row_embeddings = xlsx_adapter.build_row_embeddings(items, resolved_path)
+                    embedding_texts = [row_embedding.text for row_embedding in row_embeddings]
+                else:
+                    row_embeddings = []
+                    embedding_texts = [
+                        _build_embedding_text(item, resolved_path, file_type=file_type)
+                        for item in items
+                    ]
                 LOGGER.info(
                     "Embedding generation started for %s with %s items",
                     resolved_path,
                     len(embedding_texts),
                 )
-                active_reporter.on_embedding_start(resolved_path, len(embedding_texts))
-                started_at = time.perf_counter()
-                blobs = provider.embed_texts(
-                    embedding_texts,
-                    on_progress=active_reporter.on_embedding_item,
-                )
-                if len(blobs) != len(items):
-                    raise RuntimeError("Embedding provider returned an unexpected number of vectors.")
-                store.replace_document_embeddings(
-                    connection,
-                    document_id=document_ref.document_id,
-                    model_name=provider.model_name,
-                    dimensions=provider.dimensions,
-                    embeddings=[
-                        (store.make_storage_id(document_ref.document_id, item.item_id), blob)
-                        for item, blob in zip(items, blobs, strict=True)
-                    ],
-                )
-                LOGGER.info(
-                    "Embedding generation completed for %s with %s items in %.3fs",
-                    resolved_path,
-                    len(embedding_texts),
-                    time.perf_counter() - started_at,
-                )
+                if embedding_texts:
+                    active_reporter.on_embedding_start(resolved_path, len(embedding_texts))
+                    started_at = time.perf_counter()
+                    blobs = provider.embed_texts(
+                        embedding_texts,
+                        on_progress=active_reporter.on_embedding_item,
+                    )
+                    if file_type == "xlsx":
+                        if len(blobs) != len(row_embeddings):
+                            raise RuntimeError(
+                                "Embedding provider returned an unexpected number of XLSX row vectors."
+                            )
+                        store.replace_xlsx_row_embeddings(
+                            connection,
+                            document_id=document_ref.document_id,
+                            model_name=provider.model_name,
+                            dimensions=provider.dimensions,
+                            row_embeddings=_build_xlsx_row_embedding_records(
+                                document_ref.document_id,
+                                row_embeddings,
+                                blobs,
+                            ),
+                        )
+                    else:
+                        if len(blobs) != len(items):
+                            raise RuntimeError(
+                                "Embedding provider returned an unexpected number of vectors."
+                            )
+                        store.replace_document_embeddings(
+                            connection,
+                            document_id=document_ref.document_id,
+                            model_name=provider.model_name,
+                            dimensions=provider.dimensions,
+                            embeddings=[
+                                (store.make_storage_id(document_ref.document_id, item.item_id), blob)
+                                for item, blob in zip(items, blobs, strict=True)
+                            ],
+                        )
+                    LOGGER.info(
+                        "Embedding generation completed for %s with %s items in %.3fs",
+                        resolved_path,
+                        len(embedding_texts),
+                        time.perf_counter() - started_at,
+                    )
             connection.commit()
         except Exception:
             connection.rollback()
@@ -695,12 +728,17 @@ class AppServices:
         limit: int,
         require_embeddings: bool = True,
     ) -> list[SearchHit]:
-        rows = store.fetch_item_embeddings(
+        item_rows = store.fetch_item_embeddings(
             connection,
             file_type=file_type,
             document_path=document_path,
         )
-        if not rows:
+        xlsx_rows = store.fetch_xlsx_row_embeddings(
+            connection,
+            file_type=file_type,
+            document_path=document_path,
+        )
+        if not item_rows and not xlsx_rows:
             if require_embeddings:
                 raise NoEmbeddingsError(
                     "No embeddings are indexed for the requested corpus. Reindex with --with-embeddings first."
@@ -716,12 +754,18 @@ class AppServices:
         query_vector = _unpack_embedding(provider.embed_texts([query])[0], provider.dimensions)
 
         scored_hits: list[SearchHit] = []
-        for row in rows:
+        for row in item_rows:
             similarity = _cosine_similarity(
                 query_vector,
                 _unpack_embedding(row["embedding"], int(row["dimensions"])),
             )
             scored_hits.append(_search_hit_from_semantic_row(row, similarity))
+        for row in xlsx_rows:
+            similarity = _cosine_similarity(
+                query_vector,
+                _unpack_embedding(row["embedding"], int(row["dimensions"])),
+            )
+            scored_hits.append(_search_hit_from_xlsx_semantic_row(connection, row, similarity))
 
         scored_hits.sort(
             key=lambda hit: (
@@ -952,6 +996,38 @@ def _search_hit_from_semantic_row(row: sqlite3.Row, similarity: float) -> Search
     )
 
 
+def _search_hit_from_xlsx_semantic_row(
+    connection: sqlite3.Connection,
+    row: sqlite3.Row,
+    similarity: float,
+) -> SearchHit:
+    contributing_cells = store.fetch_xlsx_row_embedding_cells(connection, row["embedding_id"])
+    representative_coordinate = _metadata_value(row, "coordinate")
+    return SearchHit(
+        document_id=row["document_id"],
+        item_id=row["item_id"],
+        score=similarity,
+        matched_text=row["content_text"],
+        locator=row["locator"],
+        item_type=row["item_type"],
+        preview=row["preview"],
+        document_path=Path(row["path"]),
+        display_name=row["display_name"],
+        match_mode="semantic",
+        scores={"semantic": similarity, "final": similarity},
+        metadata={
+            "matched_sheet": row["sheet_name"],
+            "matched_row": int(row["row_number"]),
+            "contributing_cell_coordinates": [
+                cell["cell_coordinate"]
+                for cell in contributing_cells
+            ],
+            "representative_cell_coordinate": representative_coordinate,
+            "resolved_from_row_embedding": True,
+        },
+    )
+
+
 def _document_ref_from_row(row: sqlite3.Row) -> DocumentRef:
     return DocumentRef(
         document_id=row["document_id"],
@@ -1074,6 +1150,7 @@ def _merge_hybrid_hits(
                     "semantic": semantic_score,
                     "final": final_score,
                 },
+                metadata=dict(base_hit.metadata),
             )
         )
 
@@ -1097,6 +1174,68 @@ def _ensure_current_target_resolves(document_path: Path, file_type: FileType, it
         pptx_adapter.read_text_shape(document_path, item_id)
         return
     xlsx_adapter.read_cell(document_path, item_id)
+
+
+def _build_xlsx_row_embedding_records(
+    document_id: str,
+    row_embeddings: Sequence[XlsxRowEmbedding],
+    blobs: Sequence[bytes],
+) -> list[
+    tuple[
+        str,
+        str,
+        int,
+        str,
+        str,
+        str,
+        bytes,
+        list[tuple[str, str, int, bool]],
+    ]
+]:
+    records: list[
+        tuple[
+            str,
+            str,
+            int,
+            str,
+            str,
+            str,
+            bytes,
+            list[tuple[str, str, int, bool]],
+        ]
+    ] = []
+    for row_embedding, blob in zip(row_embeddings, blobs, strict=True):
+        embedding_id = store.make_xlsx_row_embedding_id(
+            document_id,
+            row_embedding.sheet_name,
+            row_embedding.row_number,
+        )
+        representative_storage_id = store.make_storage_id(
+            document_id,
+            row_embedding.representative_item_id,
+        )
+        contributing_cells = [
+            (
+                store.make_storage_id(document_id, cell.item_id),
+                cell.coordinate,
+                index,
+                cell.item_id == row_embedding.representative_item_id,
+            )
+            for index, cell in enumerate(row_embedding.contributing_cells, start=1)
+        ]
+        records.append(
+            (
+                embedding_id,
+                row_embedding.sheet_name,
+                row_embedding.row_number,
+                representative_storage_id,
+                row_embedding.text,
+                row_embedding.preview,
+                blob,
+                contributing_cells,
+            )
+        )
+    return records
 
 
 def _raise_if_pptx_target_not_editable(document_path: Path, item_id: str) -> None:

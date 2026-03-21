@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import re
 
-from offagent.domain.models import IndexedItem
+from offagent.domain.models import IndexedItem, XlsxRowEmbedding, XlsxRowEmbeddingCell
 from offagent.errors import InvalidArgumentsError, TargetNotEditableError
 from offagent.errors import TargetNotFoundError
 
@@ -26,6 +27,24 @@ class ResolvedCell:
 
 class TargetNotAppendableError(TargetNotEditableError):
     """Raised when a requested XLSX target cannot accept append text."""
+
+
+NUMERIC_TEXT_PATTERN = re.compile(
+    r"""
+    ^\s*
+    [\(\+\-]?
+    [$€£]?
+    (?:
+        \d{1,3}(?:,\d{3})+ |
+        \d+
+    )
+    (?:\.\d+)?
+    %?
+    \)?
+    \s*$
+    """,
+    re.VERBOSE,
+)
 
 
 def extract_document(document_path: Path) -> list[IndexedItem]:
@@ -88,6 +107,57 @@ def build_embedding_text(item: IndexedItem, document_path: Path) -> str:
             f"Value: {metadata.get('display_text', item.content_text)}",
         ]
     )
+
+
+def build_row_embeddings(items: list[IndexedItem], document_path: Path) -> list[XlsxRowEmbedding]:
+    grouped: dict[tuple[str, int], list[IndexedItem]] = {}
+
+    for item in items:
+        if not _is_text_like_item(item):
+            continue
+        metadata = item.metadata
+        coordinate = str(metadata.get("coordinate", ""))
+        grouped.setdefault(
+            (str(metadata.get("sheet_name", "")), _row_number(coordinate)),
+            [],
+        ).append(item)
+
+    row_embeddings: list[XlsxRowEmbedding] = []
+    for (sheet_name, row_number), row_items in sorted(grouped.items()):
+        ordered_items = sorted(
+            row_items,
+            key=lambda item: _coordinate_sort_key(str(item.metadata.get("coordinate", ""))),
+        )
+        contributing_cells = tuple(
+            XlsxRowEmbeddingCell(
+                item_id=item.item_id,
+                coordinate=str(item.metadata.get("coordinate", "")),
+                display_text=str(item.metadata.get("display_text", item.content_text)),
+                preview=item.preview,
+            )
+            for item in ordered_items
+        )
+        representative = max(
+            ordered_items,
+            key=lambda item: _representative_score(str(item.metadata.get("coordinate", "")), item),
+        )
+        row_embeddings.append(
+            XlsxRowEmbedding(
+                sheet_name=sheet_name,
+                row_number=row_number,
+                text=_build_row_embedding_text(
+                    document_path.name,
+                    sheet_name,
+                    row_number,
+                    contributing_cells,
+                ),
+                preview=representative.preview,
+                representative_item_id=representative.item_id,
+                contributing_cells=contributing_cells,
+            )
+        )
+
+    return row_embeddings
 
 
 def read_cell(document_path: Path, item_id: str) -> str:
@@ -216,3 +286,59 @@ def _context_text(entries: list[tuple[str, str]], *, exclude: str) -> str:
 
 def _target_path(document_path: Path, output_path: Path | None) -> Path:
     return document_path if output_path is None else output_path
+
+
+def _is_text_like_item(item: IndexedItem) -> bool:
+    metadata = item.metadata
+    display_text = str(metadata.get("display_text", item.content_text)).strip()
+    if not display_text:
+        return False
+
+    raw_value = metadata.get("raw_value")
+    if metadata.get("formula") is not None:
+        return False
+    if isinstance(raw_value, bool):
+        return False
+    if isinstance(raw_value, (int, float)):
+        return False
+    if NUMERIC_TEXT_PATTERN.match(display_text):
+        return False
+    return any(character.isalpha() for character in display_text)
+
+
+def _row_number(coordinate: str) -> int:
+    row_number, _ = _coordinate_sort_key(coordinate)
+    return row_number
+
+
+def _coordinate_sort_key(coordinate: str) -> tuple[int, int]:
+    normalized = _normalize_coordinate(coordinate)
+    if coordinate_to_tuple is None:
+        raise RuntimeError("openpyxl is required for XLSX operations.")
+    return coordinate_to_tuple(normalized)
+
+
+def _representative_score(coordinate: str, item: IndexedItem) -> tuple[int, int, int]:
+    display_text = str(item.metadata.get("display_text", item.content_text))
+    _, column_number = _coordinate_sort_key(coordinate)
+    alpha_characters = sum(1 for character in display_text if character.isalpha())
+    return (alpha_characters, len(display_text), -column_number)
+
+
+def _build_row_embedding_text(
+    workbook_name: str,
+    sheet_name: str,
+    row_number: int,
+    contributing_cells: tuple[XlsxRowEmbeddingCell, ...],
+) -> str:
+    lines = [
+        f"Workbook: {workbook_name}",
+        f"Sheet: {sheet_name}",
+        f"Row: {row_number}",
+        "Cells:",
+    ]
+    lines.extend(
+        f"- {cell.coordinate}: {cell.display_text}"
+        for cell in contributing_cells
+    )
+    return "\n".join(lines)

@@ -45,6 +45,7 @@ class SearchHit:
     display_name: str | None = None
     match_mode: MatchMode | None = None
     scores: dict[str, float] | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -55,6 +56,24 @@ class IndexedItem:
     preview: str
     content_text: str
     metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class XlsxRowEmbeddingCell:
+    item_id: str
+    coordinate: str
+    display_text: str
+    preview: str
+
+
+@dataclass(frozen=True)
+class XlsxRowEmbedding:
+    sheet_name: str
+    row_number: int
+    text: str
+    preview: str
+    representative_item_id: str
+    contributing_cells: tuple[XlsxRowEmbeddingCell, ...]
 
 
 @dataclass(frozen=True)

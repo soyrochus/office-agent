@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from openpyxl import Workbook
+
 from offagent.adapters import xlsx_adapter
 
 
@@ -41,3 +43,44 @@ def test_build_embedding_text_uses_contextual_metadata(sample_xlsx) -> None:
     assert "Cell: A1" in text
     assert "Column Context: Follow up with finance." in text
     assert "Value: Supplier shall review variance." in text
+
+
+def test_build_row_embeddings_filters_numeric_and_formula_cells(sample_xlsx) -> None:
+    items = xlsx_adapter.extract_document(sample_xlsx)
+
+    row_embeddings = xlsx_adapter.build_row_embeddings(items, sample_xlsx)
+
+    assert [
+        (row.sheet_name, row.row_number, row.representative_item_id)
+        for row in row_embeddings
+    ] == [
+        ("Budget2026", 1, "sheet:Budget2026!A1"),
+        ("Notes 2026", 1, "sheet:Notes 2026!A1"),
+        ("Notes 2026", 2, "sheet:Notes 2026!A2"),
+    ]
+    assert all(
+        [cell.coordinate for cell in row.contributing_cells] in (["A1"], ["A2"])
+        for row in row_embeddings
+    )
+
+
+def test_build_row_embeddings_preserve_mixed_text_rows_and_pick_representative(tmp_path) -> None:
+    path = tmp_path / "mixed.xlsx"
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "Sheet1"
+    worksheet["A1"] = "Status"
+    worksheet["B1"] = 125000
+    worksheet["C1"] = "Needs review"
+    workbook.save(path)
+
+    items = xlsx_adapter.extract_document(path)
+    row_embeddings = xlsx_adapter.build_row_embeddings(items, path)
+
+    assert len(row_embeddings) == 1
+    row_embedding = row_embeddings[0]
+    assert row_embedding.representative_item_id == "sheet:Sheet1!C1"
+    assert [cell.coordinate for cell in row_embedding.contributing_cells] == ["A1", "C1"]
+    assert "A1: Status" in row_embedding.text
+    assert "C1: Needs review" in row_embedding.text
+    assert "B1: 125000" not in row_embedding.text

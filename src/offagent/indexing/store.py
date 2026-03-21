@@ -54,6 +54,35 @@ CREATE TABLE IF NOT EXISTS item_embeddings (
 );
 """
 
+XLSX_ROW_EMBEDDINGS_SQL = """
+CREATE TABLE IF NOT EXISTS xlsx_row_embeddings (
+    embedding_id TEXT PRIMARY KEY,
+    document_id TEXT NOT NULL,
+    sheet_name TEXT NOT NULL,
+    row_number INTEGER NOT NULL,
+    representative_storage_id TEXT NOT NULL REFERENCES items(storage_id),
+    content_text TEXT NOT NULL,
+    preview TEXT NOT NULL,
+    model_name TEXT NOT NULL,
+    dimensions INTEGER NOT NULL,
+    embedding BLOB NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(document_id, sheet_name, row_number),
+    FOREIGN KEY (document_id) REFERENCES documents(document_id)
+);
+"""
+
+XLSX_ROW_EMBEDDING_CELLS_SQL = """
+CREATE TABLE IF NOT EXISTS xlsx_row_embedding_cells (
+    embedding_id TEXT NOT NULL REFERENCES xlsx_row_embeddings(embedding_id),
+    storage_id TEXT NOT NULL REFERENCES items(storage_id),
+    cell_coordinate TEXT NOT NULL,
+    cell_order INTEGER NOT NULL,
+    is_representative INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (embedding_id, storage_id)
+);
+"""
+
 EMBEDDING_META_SQL = """
 CREATE TABLE IF NOT EXISTS embedding_meta (
     key TEXT PRIMARY KEY,
@@ -99,6 +128,8 @@ def initialize_schema(connection: sqlite3.Connection) -> None:
     connection.executescript(DOCUMENTS_SQL)
     connection.executescript(ITEMS_SQL)
     connection.executescript(ITEM_EMBEDDINGS_SQL)
+    connection.executescript(XLSX_ROW_EMBEDDINGS_SQL)
+    connection.executescript(XLSX_ROW_EMBEDDING_CELLS_SQL)
     connection.executescript(EMBEDDING_META_SQL)
     _migrate_documents_table(connection)
     _migrate_items_table(connection)
@@ -118,6 +149,10 @@ def ensure_ready(index_path: Path) -> sqlite3.Connection:
 
 def make_storage_id(document_id: str, item_id: str) -> str:
     return f"{document_id}:{item_id}"
+
+
+def make_xlsx_row_embedding_id(document_id: str, sheet_name: str, row_number: int) -> str:
+    return f"{document_id}:xlsx-row:{sheet_name}!{row_number}"
 
 
 def upsert_document(connection: sqlite3.Connection, document: DocumentRef) -> None:
@@ -358,12 +393,102 @@ def fetch_item_embeddings(
     return list(connection.execute(sql, params).fetchall())
 
 
+def fetch_xlsx_row_embeddings(
+    connection: sqlite3.Connection,
+    *,
+    file_type: str | None = None,
+    document_path: Path | None = None,
+) -> list[sqlite3.Row]:
+    if file_type not in (None, "xlsx"):
+        return []
+
+    sql = """
+    SELECT
+        e.embedding_id,
+        e.document_id,
+        e.sheet_name,
+        e.row_number,
+        e.representative_storage_id,
+        e.content_text,
+        e.preview AS row_preview,
+        e.model_name,
+        e.dimensions,
+        e.embedding,
+        e.updated_at,
+        i.item_id,
+        i.item_type,
+        i.locator,
+        i.preview,
+        i.content_text AS item_content_text,
+        i.metadata_json,
+        d.path,
+        d.display_name
+    FROM xlsx_row_embeddings AS e
+    JOIN documents AS d ON d.document_id = e.document_id
+    JOIN items AS i ON i.storage_id = e.representative_storage_id
+    WHERE d.is_active = 1
+      AND d.file_type = 'xlsx'
+    """
+    params: list[object] = []
+
+    if document_path is not None:
+        sql += " AND d.path = ?"
+        params.append(str(document_path.resolve()))
+
+    sql += " ORDER BY d.path, e.sheet_name, e.row_number"
+    return list(connection.execute(sql, params).fetchall())
+
+
+def fetch_xlsx_row_embedding_cells(
+    connection: sqlite3.Connection,
+    embedding_id: str,
+) -> list[sqlite3.Row]:
+    return list(
+        connection.execute(
+            """
+            SELECT
+                embedding_id,
+                storage_id,
+                cell_coordinate,
+                cell_order,
+                is_representative
+            FROM xlsx_row_embedding_cells
+            WHERE embedding_id = ?
+            ORDER BY cell_order, cell_coordinate
+            """,
+            (embedding_id,),
+        ).fetchall()
+    )
+
+
 def has_item_embeddings(
     connection: sqlite3.Connection,
     *,
     file_type: str | None = None,
     document_path: Path | None = None,
 ) -> bool:
+    if file_type == "xlsx":
+        sql = """
+        SELECT 1
+        FROM xlsx_row_embeddings AS e
+        JOIN documents AS d ON d.document_id = e.document_id
+        WHERE d.is_active = 1
+          AND d.file_type = 'xlsx'
+        """
+        params: list[object] = []
+        if document_path is not None:
+            sql += " AND d.path = ?"
+            params.append(str(document_path.resolve()))
+        sql += " LIMIT 1"
+        return connection.execute(sql, params).fetchone() is not None
+
+    if file_type is None:
+        if has_item_embeddings(connection, file_type="docx", document_path=document_path):
+            return True
+        if has_item_embeddings(connection, file_type="pptx", document_path=document_path):
+            return True
+        return has_item_embeddings(connection, file_type="xlsx", document_path=document_path)
+
     sql = """
     SELECT 1
     FROM item_embeddings AS e
@@ -386,12 +511,34 @@ def has_item_embeddings(
 
 
 def delete_document_embeddings(connection: sqlite3.Connection, document_id: str) -> None:
+    delete_document_xlsx_row_embeddings(connection, document_id)
     connection.execute(
         """
         DELETE FROM item_embeddings
         WHERE storage_id LIKE ?
         """,
         (f"{document_id}:%",),
+    )
+
+
+def delete_document_xlsx_row_embeddings(connection: sqlite3.Connection, document_id: str) -> None:
+    connection.execute(
+        """
+        DELETE FROM xlsx_row_embedding_cells
+        WHERE embedding_id IN (
+            SELECT embedding_id
+            FROM xlsx_row_embeddings
+            WHERE document_id = ?
+        )
+        """,
+        (document_id,),
+    )
+    connection.execute(
+        """
+        DELETE FROM xlsx_row_embeddings
+        WHERE document_id = ?
+        """,
+        (document_id,),
     )
 
 
@@ -419,6 +566,90 @@ def replace_document_embeddings(
             """,
             (storage_id, model_name, dimensions, embedding, updated_at),
         )
+
+
+def replace_xlsx_row_embeddings(
+    connection: sqlite3.Connection,
+    *,
+    document_id: str,
+    model_name: str,
+    dimensions: int,
+    row_embeddings: Sequence[
+        tuple[
+            str,
+            str,
+            int,
+            str,
+            str,
+            str,
+            bytes,
+            Sequence[tuple[str, str, int, bool]],
+        ]
+    ],
+) -> None:
+    delete_document_xlsx_row_embeddings(connection, document_id)
+    updated_at = dt.datetime.now(dt.timezone.utc).isoformat()
+    for (
+        embedding_id,
+        sheet_name,
+        row_number,
+        representative_storage_id,
+        content_text,
+        preview,
+        embedding,
+        contributing_cells,
+    ) in row_embeddings:
+        connection.execute(
+            """
+            INSERT INTO xlsx_row_embeddings (
+                embedding_id,
+                document_id,
+                sheet_name,
+                row_number,
+                representative_storage_id,
+                content_text,
+                preview,
+                model_name,
+                dimensions,
+                embedding,
+                updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                embedding_id,
+                document_id,
+                sheet_name,
+                row_number,
+                representative_storage_id,
+                content_text,
+                preview,
+                model_name,
+                dimensions,
+                embedding,
+                updated_at,
+            ),
+        )
+        for storage_id, cell_coordinate, cell_order, is_representative in contributing_cells:
+            connection.execute(
+                """
+                INSERT INTO xlsx_row_embedding_cells (
+                    embedding_id,
+                    storage_id,
+                    cell_coordinate,
+                    cell_order,
+                    is_representative
+                )
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    embedding_id,
+                    storage_id,
+                    cell_coordinate,
+                    cell_order,
+                    1 if is_representative else 0,
+                ),
+            )
 
 
 def fetch_embedding_meta(connection: sqlite3.Connection) -> dict[str, str]:

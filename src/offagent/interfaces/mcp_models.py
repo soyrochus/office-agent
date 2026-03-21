@@ -67,6 +67,7 @@ class SearchHitModel(MCPModel):
     display_name: str | None = None
     match_mode: str | None = None
     scores: dict[str, float] | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
     @classmethod
     def from_search_hit(cls, hit: SearchHit) -> "SearchHitModel":
@@ -82,6 +83,7 @@ class SearchHitModel(MCPModel):
             display_name=hit.display_name,
             match_mode=hit.match_mode,
             scores=hit.scores,
+            metadata=hit.metadata,
         )
 
 
