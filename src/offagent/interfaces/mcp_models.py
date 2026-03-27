@@ -6,7 +6,33 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from offagent.app.services import IndexSummary, OutputMode, PatchResult
-from offagent.domain.models import DocumentRef, FileType, ItemRef, SearchHit, SearchMode
+from offagent.domain.models import (
+    BlockBundle,
+    DocxParagraph,
+    DocxTable,
+    DocumentBlock,
+    DocumentBlocks,
+    DocumentRef,
+    DocumentStructure,
+    FileType,
+    ItemRef,
+    ParagraphCollection,
+    PresentationSlideSummary,
+    PresentationStructure,
+    SearchHit,
+    SearchMode,
+    SheetCell,
+    SheetSnapshot,
+    SlideBundle,
+    SlideNotes,
+    SlideTextBlock,
+    StructureUnit,
+    StructuredTarget,
+    StructuredWriteResult,
+    TableCollection,
+    WorkbookStructure,
+    WorksheetSummary,
+)
 
 
 class MCPModel(BaseModel):
@@ -211,6 +237,368 @@ class ReplaceTextRequest(MCPModel):
     document_id: str = Field(min_length=1)
     item_id: str = Field(min_length=1)
     new_text: str
+    output_mode: OutputMode = "versioned"
+
+
+class StructureUnitModel(MCPModel):
+    position: int
+    unit_type: str
+    preview: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @classmethod
+    def from_domain(cls, unit: StructureUnit) -> "StructureUnitModel":
+        return cls(
+            position=unit.position,
+            unit_type=unit.unit_type,
+            preview=unit.preview,
+            metadata=unit.metadata,
+        )
+
+
+class DocumentStructureResult(MCPModel):
+    document: DocumentModel
+    units: list[StructureUnitModel]
+
+    @classmethod
+    def from_domain(cls, result: DocumentStructure) -> "DocumentStructureResult":
+        return cls(
+            document=DocumentModel.from_document_ref(result.document),
+            units=[StructureUnitModel.from_domain(unit) for unit in result.units],
+        )
+
+
+class PresentationSlideSummaryModel(MCPModel):
+    slide_number: int
+    preview: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @classmethod
+    def from_domain(cls, slide: PresentationSlideSummary) -> "PresentationSlideSummaryModel":
+        return cls(slide_number=slide.slide_number, preview=slide.preview, metadata=slide.metadata)
+
+
+class PresentationStructureResult(MCPModel):
+    document: DocumentModel
+    slides: list[PresentationSlideSummaryModel]
+
+    @classmethod
+    def from_domain(cls, result: PresentationStructure) -> "PresentationStructureResult":
+        return cls(
+            document=DocumentModel.from_document_ref(result.document),
+            slides=[PresentationSlideSummaryModel.from_domain(slide) for slide in result.slides],
+        )
+
+
+class SlideTextBlockModel(MCPModel):
+    position: int
+    shape_id: int
+    shape_name: str | None = None
+    preview: str
+    text: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @classmethod
+    def from_domain(cls, block: SlideTextBlock) -> "SlideTextBlockModel":
+        return cls(
+            position=block.position,
+            shape_id=block.shape_id,
+            shape_name=block.shape_name,
+            preview=block.preview,
+            text=block.text,
+            metadata=block.metadata,
+        )
+
+
+class SlideBundleResult(MCPModel):
+    document: DocumentModel
+    slide_number: int
+    preview: str
+    notes_text: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    text_blocks: list[SlideTextBlockModel]
+
+    @classmethod
+    def from_domain(cls, result: SlideBundle) -> "SlideBundleResult":
+        return cls(
+            document=DocumentModel.from_document_ref(result.document),
+            slide_number=result.slide_number,
+            preview=result.preview,
+            notes_text=result.notes_text,
+            metadata=result.metadata,
+            text_blocks=[SlideTextBlockModel.from_domain(block) for block in result.text_blocks],
+        )
+
+
+class SlideNotesResult(MCPModel):
+    document_id: str
+    slide_number: int
+    notes_text: str
+
+    @classmethod
+    def from_domain(cls, result: SlideNotes) -> "SlideNotesResult":
+        return cls(
+            document_id=result.document_id,
+            slide_number=result.slide_number,
+            notes_text=result.notes_text,
+        )
+
+
+class WorksheetSummaryModel(MCPModel):
+    position: int
+    sheet_name: str
+    preview: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @classmethod
+    def from_domain(cls, sheet: WorksheetSummary) -> "WorksheetSummaryModel":
+        return cls(
+            position=sheet.position,
+            sheet_name=sheet.sheet_name,
+            preview=sheet.preview,
+            metadata=sheet.metadata,
+        )
+
+
+class WorkbookStructureResult(MCPModel):
+    document: DocumentModel
+    sheets: list[WorksheetSummaryModel]
+
+    @classmethod
+    def from_domain(cls, result: WorkbookStructure) -> "WorkbookStructureResult":
+        return cls(
+            document=DocumentModel.from_document_ref(result.document),
+            sheets=[WorksheetSummaryModel.from_domain(sheet) for sheet in result.sheets],
+        )
+
+
+class SheetCellModel(MCPModel):
+    coordinate: str
+    row: int
+    column: int
+    display_value: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @classmethod
+    def from_domain(cls, cell: SheetCell) -> "SheetCellModel":
+        return cls(
+            coordinate=cell.coordinate,
+            row=cell.row,
+            column=cell.column,
+            display_value=cell.display_value,
+            metadata=cell.metadata,
+        )
+
+
+class SheetSnapshotResult(MCPModel):
+    document: DocumentModel
+    sheet_name: str
+    cells: list[SheetCellModel]
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @classmethod
+    def from_domain(cls, result: SheetSnapshot) -> "SheetSnapshotResult":
+        return cls(
+            document=DocumentModel.from_document_ref(result.document),
+            sheet_name=result.sheet_name,
+            cells=[SheetCellModel.from_domain(cell) for cell in result.cells],
+            metadata=result.metadata,
+        )
+
+
+class DocumentBlockModel(MCPModel):
+    block_index: int
+    block_type: str
+    preview: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @classmethod
+    def from_domain(cls, block: DocumentBlock) -> "DocumentBlockModel":
+        return cls(
+            block_index=block.block_index,
+            block_type=block.block_type,
+            preview=block.preview,
+            metadata=block.metadata,
+        )
+
+
+class DocumentBlocksResult(MCPModel):
+    document: DocumentModel
+    blocks: list[DocumentBlockModel]
+
+    @classmethod
+    def from_domain(cls, result: DocumentBlocks) -> "DocumentBlocksResult":
+        return cls(
+            document=DocumentModel.from_document_ref(result.document),
+            blocks=[DocumentBlockModel.from_domain(block) for block in result.blocks],
+        )
+
+
+class DocxParagraphModel(MCPModel):
+    block_index: int
+    paragraph_index: int
+    text: str
+    style_name: str | None = None
+    is_heading: bool
+    preview: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @classmethod
+    def from_domain(cls, paragraph: DocxParagraph) -> "DocxParagraphModel":
+        return cls(
+            block_index=paragraph.block_index,
+            paragraph_index=paragraph.paragraph_index,
+            text=paragraph.text,
+            style_name=paragraph.style_name,
+            is_heading=paragraph.is_heading,
+            preview=paragraph.preview,
+            metadata=paragraph.metadata,
+        )
+
+
+class ParagraphsResult(MCPModel):
+    document: DocumentModel
+    paragraphs: list[DocxParagraphModel]
+
+    @classmethod
+    def from_domain(cls, result: ParagraphCollection) -> "ParagraphsResult":
+        return cls(
+            document=DocumentModel.from_document_ref(result.document),
+            paragraphs=[DocxParagraphModel.from_domain(paragraph) for paragraph in result.paragraphs],
+        )
+
+
+class DocxTableModel(MCPModel):
+    block_index: int
+    table_index: int
+    rows: list[list[str]]
+    preview: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @classmethod
+    def from_domain(cls, table: DocxTable) -> "DocxTableModel":
+        return cls(
+            block_index=table.block_index,
+            table_index=table.table_index,
+            rows=[list(row) for row in table.rows],
+            preview=table.preview,
+            metadata=table.metadata,
+        )
+
+
+class TablesResult(MCPModel):
+    document: DocumentModel
+    tables: list[DocxTableModel]
+
+    @classmethod
+    def from_domain(cls, result: TableCollection) -> "TablesResult":
+        return cls(
+            document=DocumentModel.from_document_ref(result.document),
+            tables=[DocxTableModel.from_domain(table) for table in result.tables],
+        )
+
+
+class BlockBundleResult(MCPModel):
+    document: DocumentModel
+    block: DocumentBlockModel
+    paragraph: DocxParagraphModel | None = None
+    table: DocxTableModel | None = None
+
+    @classmethod
+    def from_domain(cls, result: BlockBundle) -> "BlockBundleResult":
+        return cls(
+            document=DocumentModel.from_document_ref(result.document),
+            block=DocumentBlockModel.from_domain(result.block),
+            paragraph=(
+                None if result.paragraph is None else DocxParagraphModel.from_domain(result.paragraph)
+            ),
+            table=None if result.table is None else DocxTableModel.from_domain(result.table),
+        )
+
+
+class StructuredTargetModel(MCPModel):
+    target_type: str
+    identifier: str
+    preview: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @classmethod
+    def from_domain(cls, target: StructuredTarget) -> "StructuredTargetModel":
+        return cls(
+            target_type=target.target_type,
+            identifier=target.identifier,
+            preview=target.preview,
+            metadata=target.metadata,
+        )
+
+
+class StructuredWriteToolResult(MCPModel):
+    document_path: str
+    output_path: str
+    target: StructuredTargetModel
+    summary: str
+
+    @classmethod
+    def from_domain(cls, result: StructuredWriteResult) -> "StructuredWriteToolResult":
+        return cls(
+            document_path=str(result.document_path),
+            output_path=str(result.output_path),
+            target=StructuredTargetModel.from_domain(result.target),
+            summary=result.summary,
+        )
+
+
+class SemanticDocumentRequest(MCPModel):
+    document_id: str = Field(min_length=1)
+
+
+class SlideRequest(MCPModel):
+    document_id: str = Field(min_length=1)
+    slide_number: int = Field(ge=1)
+
+
+class SheetSnapshotRequest(MCPModel):
+    document_id: str = Field(min_length=1)
+    sheet_name: str = Field(min_length=1)
+    cell_range: str | None = None
+    start_cell: str | None = None
+    row_count: int | None = Field(default=None, ge=1)
+    column_count: int | None = Field(default=None, ge=1)
+
+
+class BlockRequest(MCPModel):
+    document_id: str = Field(min_length=1)
+    block_index: int = Field(ge=0)
+
+
+class AppendRowRequest(MCPModel):
+    document_id: str = Field(min_length=1)
+    sheet_name: str = Field(min_length=1)
+    values: list[str] | None = None
+    record: dict[str, str] | None = None
+    output_mode: OutputMode = "versioned"
+
+
+class WriteTableRequest(MCPModel):
+    document_id: str = Field(min_length=1)
+    sheet_name: str = Field(min_length=1)
+    rows: list[list[str]] | None = None
+    records: list[dict[str, str]] | None = None
+    column_mapping: dict[str, str] | None = None
+    output_mode: OutputMode = "versioned"
+
+
+class AppendParagraphRequest(MCPModel):
+    document_id: str = Field(min_length=1)
+    text: str
+    style_name: str | None = None
+    output_mode: OutputMode = "versioned"
+
+
+class ReplaceBlockRequest(MCPModel):
+    document_id: str = Field(min_length=1)
+    block_index: int = Field(ge=0)
+    text: str
     output_mode: OutputMode = "versioned"
 
 

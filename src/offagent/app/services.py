@@ -16,12 +16,26 @@ from offagent.adapters import docx_adapter, embedding_provider, pptx_adapter, xl
 from offagent.app.progress import NullProgressReporter, ProgressReporter
 from offagent.config import AppConfig
 from offagent.domain.models import (
+    BlockBundle,
+    DocumentBlock,
+    DocumentBlocks,
     DocumentRef,
+    DocumentStructure,
     FileType,
     IndexedItem,
     ItemRef,
+    ParagraphCollection,
+    PresentationStructure,
     SearchHit,
     SearchMode,
+    SheetSnapshot,
+    SlideNotes,
+    StructureUnit,
+    StructuredTarget,
+    StructuredWriteResult,
+    TableCollection,
+    WorkbookStructure,
+    WorksheetSummary,
     XlsxRowEmbedding,
 )
 from offagent.errors import InvalidArgumentsError, NoEmbeddingsError, PolicyRefusedError, StaleLocatorError
@@ -152,6 +166,238 @@ class AppServices:
 
     def resolve_document_path(self, document_id: str) -> Path:
         return self.get_document(document_id).path
+
+    def get_document_structure(self, document_id: str) -> DocumentStructure:
+        document = self.get_document(document_id)
+        if document.file_type == "docx":
+            units = tuple(
+                StructureUnit(
+                    position=block.block_index,
+                    unit_type=block.block_type,
+                    preview=block.preview,
+                    metadata=block.metadata,
+                )
+                for block in docx_adapter.get_blocks(document.path)
+            )
+        elif document.file_type == "pptx":
+            units = tuple(
+                StructureUnit(
+                    position=slide.slide_number,
+                    unit_type="slide",
+                    preview=slide.preview,
+                    metadata=slide.metadata,
+                )
+                for slide in pptx_adapter.get_presentation_structure(document.path)
+            )
+        else:
+            workbook_structure = xlsx_adapter.get_workbook_structure(document.path)
+            units = tuple(
+                StructureUnit(
+                    position=sheet.position,
+                    unit_type="worksheet",
+                    preview=sheet.preview,
+                    metadata={"sheet_name": sheet.sheet_name, **sheet.metadata},
+                )
+                for sheet in workbook_structure.sheets
+            )
+
+        return DocumentStructure(document=document, units=units)
+
+    def get_presentation_structure(self, document_id: str) -> PresentationStructure:
+        document = self._require_document_type(document_id, expected="pptx", operation="get_presentation_structure")
+        result = pptx_adapter.get_presentation_structure(document.path)
+        return PresentationStructure(document=document, slides=result)
+
+    def get_slide_bundle(self, document_id: str, slide_number: int):
+        document = self._require_document_type(document_id, expected="pptx", operation="get_slide_bundle")
+        return replace(pptx_adapter.get_slide_bundle(document.path, slide_number), document=document)
+
+    def get_slide_notes(self, document_id: str, slide_number: int) -> SlideNotes:
+        document = self._require_document_type(document_id, expected="pptx", operation="get_slide_notes")
+        return SlideNotes(
+            document_id=document.document_id,
+            slide_number=slide_number,
+            notes_text=pptx_adapter.get_slide_notes(document.path, slide_number),
+        )
+
+    def get_workbook_structure(self, document_id: str) -> WorkbookStructure:
+        document = self._require_document_type(document_id, expected="xlsx", operation="get_workbook_structure")
+        return replace(xlsx_adapter.get_workbook_structure(document.path), document=document)
+
+    def get_sheet_snapshot(
+        self,
+        document_id: str,
+        sheet_name: str,
+        *,
+        cell_range: str | None = None,
+        start_cell: str | None = None,
+        row_count: int | None = None,
+        column_count: int | None = None,
+    ) -> SheetSnapshot:
+        document = self._require_document_type(document_id, expected="xlsx", operation="get_sheet_snapshot")
+        return replace(
+            xlsx_adapter.get_sheet_snapshot(
+                document.path,
+                sheet_name,
+                cell_range=cell_range,
+                start_cell=start_cell,
+                row_count=row_count,
+                column_count=column_count,
+            ),
+            document=document,
+        )
+
+    def get_document_blocks(self, document_id: str) -> DocumentBlocks:
+        document = self._require_document_type(document_id, expected="docx", operation="get_document_blocks")
+        return DocumentBlocks(document=document, blocks=docx_adapter.get_blocks(document.path))
+
+    def get_paragraphs(self, document_id: str) -> ParagraphCollection:
+        document = self._require_document_type(document_id, expected="docx", operation="get_paragraphs")
+        return ParagraphCollection(document=document, paragraphs=docx_adapter.get_paragraphs(document.path))
+
+    def get_tables(self, document_id: str) -> TableCollection:
+        document = self._require_document_type(document_id, expected="docx", operation="get_tables")
+        return TableCollection(document=document, tables=docx_adapter.get_tables(document.path))
+
+    def get_block_bundle(self, document_id: str, block_index: int) -> BlockBundle:
+        document = self._require_document_type(document_id, expected="docx", operation="get_block_bundle")
+        return replace(docx_adapter.get_block_bundle(document.path, block_index), document=document)
+
+    def append_row(
+        self,
+        document_id: str,
+        sheet_name: str,
+        *,
+        values: list[str] | None = None,
+        record: dict[str, str] | None = None,
+        output_mode: OutputMode = "versioned",
+    ) -> StructuredWriteResult:
+        document = self._require_document_type(document_id, expected="xlsx", operation="append_row")
+        output_path = self._resolve_write_output_path(document.path, output_mode=output_mode)
+        output_path, row_number, coordinates = xlsx_adapter.append_row(
+            document.path,
+            sheet_name,
+            values=values,
+            record=record,
+            output_path=output_path,
+        )
+        return StructuredWriteResult(
+            document_path=document.path,
+            output_path=output_path,
+            target=StructuredTarget(
+                target_type="worksheet_row",
+                identifier=f"{sheet_name}!row:{row_number}",
+                preview=", ".join(coordinates),
+                metadata={
+                    "sheet_name": sheet_name,
+                    "row_number": row_number,
+                    "coordinates": list(coordinates),
+                },
+            ),
+            summary=f"Appended row {row_number} to worksheet {sheet_name}.",
+        )
+
+    def write_table(
+        self,
+        document_id: str,
+        sheet_name: str,
+        *,
+        rows: list[list[str]] | None = None,
+        records: list[dict[str, str]] | None = None,
+        column_mapping: dict[str, str] | None = None,
+        output_mode: OutputMode = "versioned",
+    ) -> StructuredWriteResult:
+        document = self._require_document_type(document_id, expected="xlsx", operation="write_table")
+        output_path = self._resolve_write_output_path(document.path, output_mode=output_mode)
+        output_path, start_row, end_row = xlsx_adapter.write_table(
+            document.path,
+            sheet_name,
+            rows=rows,
+            records=records,
+            column_mapping=column_mapping,
+            output_path=output_path,
+        )
+        return StructuredWriteResult(
+            document_path=document.path,
+            output_path=output_path,
+            target=StructuredTarget(
+                target_type="worksheet_range",
+                identifier=f"{sheet_name}!rows:{start_row}-{end_row}",
+                preview=f"{sheet_name} rows {start_row}-{end_row}",
+                metadata={
+                    "sheet_name": sheet_name,
+                    "start_row": start_row,
+                    "end_row": end_row,
+                    "row_count": end_row - start_row + 1,
+                },
+            ),
+            summary=f"Wrote {end_row - start_row + 1} rows to worksheet {sheet_name}.",
+        )
+
+    def append_paragraph(
+        self,
+        document_id: str,
+        text: str,
+        *,
+        style_name: str | None = None,
+        output_mode: OutputMode = "versioned",
+    ) -> StructuredWriteResult:
+        document = self._require_document_type(document_id, expected="docx", operation="append_paragraph")
+        output_path = self._resolve_write_output_path(document.path, output_mode=output_mode)
+        output_path, block_index = docx_adapter.append_paragraph_block(
+            document.path,
+            text,
+            style_name=style_name,
+            output_path=output_path,
+        )
+        bundle = docx_adapter.get_block_bundle(output_path, block_index)
+        return StructuredWriteResult(
+            document_path=document.path,
+            output_path=output_path,
+            target=StructuredTarget(
+                target_type="document_block",
+                identifier=f"block:{block_index}",
+                preview=bundle.block.preview,
+                metadata={
+                    "block_index": block_index,
+                    "block_type": bundle.block.block_type,
+                    "style_name": None if bundle.paragraph is None else bundle.paragraph.style_name,
+                },
+            ),
+            summary=f"Appended paragraph block {block_index}.",
+        )
+
+    def replace_block(
+        self,
+        document_id: str,
+        block_index: int,
+        text: str,
+        *,
+        output_mode: OutputMode = "versioned",
+    ) -> StructuredWriteResult:
+        document = self._require_document_type(document_id, expected="docx", operation="replace_block")
+        output_path = self._resolve_write_output_path(document.path, output_mode=output_mode)
+        output_path = docx_adapter.replace_block(
+            document.path,
+            block_index,
+            text,
+            output_path=output_path,
+        )
+        bundle = docx_adapter.get_block_bundle(output_path, block_index)
+        return StructuredWriteResult(
+            document_path=document.path,
+            output_path=output_path,
+            target=StructuredTarget(
+                target_type="document_block",
+                identifier=f"block:{block_index}",
+                preview=bundle.block.preview,
+                metadata={
+                    "block_index": block_index,
+                    "block_type": bundle.block.block_type,
+                },
+            ),
+            summary=f"Replaced block {block_index}.",
+        )
 
     def index_path(
         self,
@@ -684,6 +930,20 @@ class AppServices:
         self._ensure_allowed_output_path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         return output_path
+
+    def _require_document_type(
+        self,
+        document_id: str,
+        *,
+        expected: FileType,
+        operation: str,
+    ) -> DocumentRef:
+        document = self.get_document(document_id)
+        if document.file_type != expected:
+            raise InvalidArgumentsError(
+                f"{operation} requires a .{expected} document, got .{document.file_type}."
+            )
+        return document
 
     def run_doctor(
         self,

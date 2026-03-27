@@ -59,6 +59,7 @@ def sample_pptx(tmp_path) -> Path:
 
     notes_box = first_slide.shapes.add_textbox(Inches(1), Inches(3.7), Inches(4.5), Inches(1))
     notes_box.text = "Secondary text frame"
+    first_slide.notes_slide.notes_text_frame.text = "Speaker notes: confirm launch owner."
 
     table_shape = first_slide.shapes.add_table(2, 2, Inches(6), Inches(1.8), Inches(3), Inches(1.5))
     table_shape.table.cell(0, 0).text = "Table text to ignore"
@@ -66,6 +67,7 @@ def sample_pptx(tmp_path) -> Path:
     second_slide = presentation.slides.add_slide(presentation.slide_layouts[6])
     editable_box = second_slide.shapes.add_textbox(Inches(1), Inches(1.5), Inches(5.5), Inches(1.5))
     editable_box.text = "Editable speaker notes"
+    second_slide.notes_slide.notes_text_frame.text = "Speaker notes: review action list."
 
     presentation.save(path)
     return path

@@ -3,7 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from offagent.domain.models import IndexedItem
+from offagent.domain.models import (
+    DocumentRef,
+    IndexedItem,
+    PresentationSlideSummary,
+    SlideBundle,
+    SlideTextBlock,
+)
 from offagent.errors import InvalidArgumentsError, TargetNotEditableError as BaseTargetNotEditableError
 from offagent.errors import TargetNotFoundError
 
@@ -105,6 +111,53 @@ def resolve_shape(document_path: Path, item_id: str) -> ResolvedShape:
     )
 
 
+def get_presentation_structure(document_path: Path) -> tuple[PresentationSlideSummary, ...]:
+    presentation = _open_presentation(document_path)
+    slides: list[PresentationSlideSummary] = []
+
+    for slide_number, slide in enumerate(presentation.slides, start=1):
+        text_blocks = _slide_text_blocks(slide)
+        preview = next((block.text for block in text_blocks if block.text), "")
+        slides.append(
+            PresentationSlideSummary(
+                slide_number=slide_number,
+                preview=preview[:120],
+                metadata={
+                    "slide_number": slide_number,
+                    "shape_count": len(slide.shapes),
+                    "text_block_count": len(text_blocks),
+                },
+            )
+        )
+
+    return tuple(slides)
+
+
+def get_slide_bundle(document_path: Path, slide_number: int) -> SlideBundle:
+    presentation = _open_presentation(document_path)
+    slide = _resolve_slide(presentation, slide_number)
+    text_blocks = _slide_text_blocks(slide)
+    preview = next((block.text for block in text_blocks if block.text), "")
+    return SlideBundle(
+        document=_document_ref(document_path),
+        slide_number=slide_number,
+        preview=preview[:120],
+        notes_text=_notes_text(slide),
+        metadata={
+            "slide_number": slide_number,
+            "shape_count": len(slide.shapes),
+            "text_block_count": len(text_blocks),
+        },
+        text_blocks=tuple(text_blocks),
+    )
+
+
+def get_slide_notes(document_path: Path, slide_number: int) -> str:
+    presentation = _open_presentation(document_path)
+    slide = _resolve_slide(presentation, slide_number)
+    return _notes_text(slide)
+
+
 def parse_item_id(item_id: str) -> tuple[int, int]:
     parts = item_id.split(":")
     if len(parts) != 4 or parts[0] != "slide" or parts[2] != "shape":
@@ -132,21 +185,39 @@ def _open_presentation(document_path: Path):
     return Presentation(str(document_path))
 
 
+def _document_ref(document_path: Path) -> DocumentRef:
+    resolved_path = document_path.resolve()
+    stat = resolved_path.stat()
+    return DocumentRef(
+        document_id=resolved_path.as_posix(),
+        path=resolved_path,
+        file_type="pptx",
+        display_name=resolved_path.name,
+        modified_time=stat.st_mtime,
+    )
+
+
 def _resolve_shape(presentation, item_id: str):
     slide_number, shape_id = parse_item_id(item_id)
-
-    try:
-        slide = presentation.slides[slide_number - 1]
-    except IndexError as exc:
-        raise TargetNotFoundError(
-            f"Slide {slide_number} does not exist in the presentation."
-        ) from exc
+    slide = _resolve_slide(presentation, slide_number)
 
     for shape in slide.shapes:
         if shape.shape_id == shape_id:
             return shape
 
     raise TargetNotFoundError(f"Shape {shape_id} does not exist on slide {slide_number}.")
+
+
+def _resolve_slide(presentation, slide_number: int):
+    if slide_number < 1:
+        raise InvalidArgumentsError(f"Invalid PPTX slide number: {slide_number}")
+
+    try:
+        return presentation.slides[slide_number - 1]
+    except IndexError as exc:
+        raise TargetNotFoundError(
+            f"Slide {slide_number} does not exist in the presentation."
+        ) from exc
 
 
 def _require_text_frame(shape):
@@ -165,3 +236,36 @@ def _shape_index(shape) -> int:
 
 def _target_path(document_path: Path, output_path: Path | None) -> Path:
     return document_path if output_path is None else output_path
+
+
+def _slide_text_blocks(slide) -> list[SlideTextBlock]:
+    blocks: list[SlideTextBlock] = []
+    for position, shape in enumerate(slide.shapes):
+        if not getattr(shape, "has_text_frame", False):
+            continue
+        text = _text_frame_text(shape.text_frame)
+        blocks.append(
+            SlideTextBlock(
+                position=position,
+                shape_id=shape.shape_id,
+                shape_name=getattr(shape, "name", None),
+                preview=text[:120],
+                text=text,
+                metadata={
+                    "shape_index": position,
+                    "is_placeholder": bool(getattr(shape, "is_placeholder", False)),
+                },
+            )
+        )
+    return blocks
+
+
+def _notes_text(slide) -> str:
+    notes_slide = getattr(slide, "notes_slide", None)
+    if notes_slide is None:
+        return ""
+    text_frame = getattr(notes_slide, "notes_text_frame", None)
+    if text_frame is None:
+        return ""
+    lines = [paragraph.text for paragraph in text_frame.paragraphs if paragraph.text.strip()]
+    return "\n".join(lines)

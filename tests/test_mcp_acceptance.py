@@ -237,3 +237,119 @@ output_roots = ["{(tmp_path / 'elsewhere').as_posix()}"]
         return run()
 
     _run_mcp(policy_config, policy_scenario)
+
+
+def test_mcp_acceptance_semantic_surface(
+    golden_config_path,
+    golden_docx,
+    golden_pptx,
+    golden_xlsx,
+    golden_workspace,
+) -> None:
+    docs_dir = golden_workspace / "docs"
+
+    def scenario(session: ClientSession):
+        async def run():
+            tools = await session.list_tools()
+            tool_map = {tool.name: tool for tool in tools.tools}
+            assert {
+                "get_document_structure",
+                "get_presentation_structure",
+                "get_slide_bundle",
+                "get_slide_notes",
+                "get_workbook_structure",
+                "get_sheet_snapshot",
+                "get_document_blocks",
+                "get_paragraphs",
+                "get_tables",
+                "get_block_bundle",
+                "append_row",
+                "write_table",
+                "append_paragraph",
+                "replace_block",
+            } <= set(tool_map)
+            assert all(tool.inputSchema is not None for tool in tool_map.values())
+            assert all(tool.outputSchema is not None for tool in tool_map.values())
+
+            await _call_tool(session, "index_documents", {"paths": [str(docs_dir)]})
+            documents_result = await _call_tool(session, "list_documents")
+            docs_by_path = {document["path"]: document for document in documents_result["documents"]}
+
+            docx_structure = await _call_tool(
+                session,
+                "get_document_structure",
+                {"document_id": docs_by_path[str(golden_docx)]["document_id"]},
+            )
+            pptx_structure = await _call_tool(
+                session,
+                "get_presentation_structure",
+                {"document_id": docs_by_path[str(golden_pptx)]["document_id"]},
+            )
+            slide_bundle = await _call_tool(
+                session,
+                "get_slide_bundle",
+                {"document_id": docs_by_path[str(golden_pptx)]["document_id"], "slide_number": 1},
+            )
+            workbook_structure = await _call_tool(
+                session,
+                "get_workbook_structure",
+                {"document_id": docs_by_path[str(golden_xlsx)]["document_id"]},
+            )
+            sheet_snapshot = await _call_tool(
+                session,
+                "get_sheet_snapshot",
+                {
+                    "document_id": docs_by_path[str(golden_xlsx)]["document_id"],
+                    "sheet_name": "Notes 2026",
+                    "start_cell": "A1",
+                    "row_count": 2,
+                    "column_count": 2,
+                },
+            )
+            append_paragraph = await _call_tool(
+                session,
+                "append_paragraph",
+                {
+                    "document_id": docs_by_path[str(golden_docx)]["document_id"],
+                    "text": "Golden semantic appendix.",
+                    "style_name": "Heading 2",
+                },
+            )
+            append_row = await _call_tool(
+                session,
+                "append_row",
+                {
+                    "document_id": docs_by_path[str(golden_xlsx)]["document_id"],
+                    "sheet_name": "Notes 2026",
+                    "values": ["Golden semantic note", "Operations"],
+                },
+            )
+
+            return {
+                "docx_structure": docx_structure,
+                "pptx_structure": pptx_structure,
+                "slide_bundle": slide_bundle,
+                "workbook_structure": workbook_structure,
+                "sheet_snapshot": sheet_snapshot,
+                "append_paragraph": append_paragraph,
+                "append_row": append_row,
+            }
+
+        return run()
+
+    result = _run_mcp(golden_config_path, scenario)
+
+    assert len(result["docx_structure"]["units"]) == 11
+    assert [slide["slide_number"] for slide in result["pptx_structure"]["slides"]] == [1, 2, 3]
+    assert result["slide_bundle"]["slide_number"] == 1
+    assert result["slide_bundle"]["notes_text"] == ""
+    assert [sheet["sheet_name"] for sheet in result["workbook_structure"]["sheets"]] == [
+        "Budget2026",
+        "Notes 2026",
+    ]
+    assert [cell["coordinate"] for cell in result["sheet_snapshot"]["cells"]] == ["A1", "B1", "A2", "B2"]
+
+    final_document = Document(result["append_paragraph"]["output_path"])
+    workbook = load_workbook(result["append_row"]["output_path"])
+    assert final_document.paragraphs[-1].text == "Golden semantic appendix."
+    assert workbook["Notes 2026"]["A4"].value == "Golden semantic note"

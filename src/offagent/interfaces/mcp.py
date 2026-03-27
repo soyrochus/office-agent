@@ -16,8 +16,15 @@ from offagent.errors import (
     TargetNotEditableError,
     TargetNotFoundError,
 )
+from offagent.interfaces import mcp_converters
 from offagent.interfaces.mcp_models import (
+    AppendParagraphRequest,
+    AppendRowRequest,
     AppendTextRequest,
+    BlockRequest,
+    BlockBundleResult,
+    DocumentBlocksResult,
+    DocumentStructureResult,
     IndexDocumentsRequest,
     IndexDocumentsResult,
     IndexPathResult,
@@ -29,10 +36,23 @@ from offagent.interfaces.mcp_models import (
     RefreshDocumentRequest,
     RefreshDocumentResult,
     ReplaceTextRequest,
+    ReplaceBlockRequest,
     SearchDocumentsRequest,
     SearchDocumentsResult,
+    SemanticDocumentRequest,
+    SheetSnapshotRequest,
+    SheetSnapshotResult,
+    SlideBundleResult,
+    SlideNotesResult,
+    SlideRequest,
+    StructuredWriteToolResult,
+    TablesResult,
+    WorkbookStructureResult,
     WriteCellRequest,
+    WriteTableRequest,
     WriteResult,
+    ParagraphsResult,
+    PresentationStructureResult,
 )
 
 try:
@@ -58,8 +78,8 @@ EXPECTED_TOOL_ERRORS = (
 
 SERVER_INSTRUCTIONS = (
     "Office Agent exposes indexed Office document workflows as MCP tools. "
-    "Use the tools for indexing, search, locate, read, and supported write operations "
-    "against DOCX, PPTX, and XLSX documents."
+    "Use the tools for indexing, search, locate, read, semantic structure inspection, "
+    "and supported write operations against DOCX, PPTX, and XLSX documents."
 )
 
 T = TypeVar("T")
@@ -159,6 +179,121 @@ def build_mcp_server(config: AppConfig):
 
         return _run_tool(runner)
 
+    @mcp.tool(description="Inspect the ordered semantic structure of an indexed Office document.")
+    def get_document_structure(document_id: str) -> DocumentStructureResult:
+        request = SemanticDocumentRequest.model_validate({"document_id": document_id})
+        return _run_tool(
+            lambda: mcp_converters.convert_document_structure(
+                services.get_document_structure(request.document_id)
+            )
+        )
+
+    @mcp.tool(description="List slide-level structure summaries for an indexed presentation.")
+    def get_presentation_structure(document_id: str) -> PresentationStructureResult:
+        request = SemanticDocumentRequest.model_validate({"document_id": document_id})
+        return _run_tool(
+            lambda: mcp_converters.convert_presentation_structure(
+                services.get_presentation_structure(request.document_id)
+            )
+        )
+
+    @mcp.tool(description="Return the ordered semantic bundle for one presentation slide.")
+    def get_slide_bundle(document_id: str, slide_number: int) -> SlideBundleResult:
+        request = SlideRequest.model_validate(
+            {"document_id": document_id, "slide_number": slide_number}
+        )
+        return _run_tool(
+            lambda: mcp_converters.convert_slide_bundle(
+                services.get_slide_bundle(request.document_id, request.slide_number)
+            )
+        )
+
+    @mcp.tool(description="Return only the notes text for one presentation slide.")
+    def get_slide_notes(document_id: str, slide_number: int) -> SlideNotesResult:
+        request = SlideRequest.model_validate(
+            {"document_id": document_id, "slide_number": slide_number}
+        )
+        return _run_tool(
+            lambda: mcp_converters.convert_slide_notes(
+                services.get_slide_notes(request.document_id, request.slide_number)
+            )
+        )
+
+    @mcp.tool(description="List worksheet structure summaries for an indexed workbook.")
+    def get_workbook_structure(document_id: str) -> WorkbookStructureResult:
+        request = SemanticDocumentRequest.model_validate({"document_id": document_id})
+        return _run_tool(
+            lambda: mcp_converters.convert_workbook_structure(
+                services.get_workbook_structure(request.document_id)
+            )
+        )
+
+    @mcp.tool(description="Return a deterministic snapshot of a worksheet or worksheet window.")
+    def get_sheet_snapshot(
+        document_id: str,
+        sheet_name: str,
+        cell_range: str | None = None,
+        start_cell: str | None = None,
+        row_count: int | None = None,
+        column_count: int | None = None,
+    ) -> SheetSnapshotResult:
+        request = SheetSnapshotRequest.model_validate(
+            {
+                "document_id": document_id,
+                "sheet_name": sheet_name,
+                "cell_range": cell_range,
+                "start_cell": start_cell,
+                "row_count": row_count,
+                "column_count": column_count,
+            }
+        )
+        return _run_tool(
+            lambda: mcp_converters.convert_sheet_snapshot(
+                services.get_sheet_snapshot(
+                    request.document_id,
+                    request.sheet_name,
+                    cell_range=request.cell_range,
+                    start_cell=request.start_cell,
+                    row_count=request.row_count,
+                    column_count=request.column_count,
+                )
+            )
+        )
+
+    @mcp.tool(description="Return ordered DOCX blocks including paragraphs and tables.")
+    def get_document_blocks(document_id: str) -> DocumentBlocksResult:
+        request = SemanticDocumentRequest.model_validate({"document_id": document_id})
+        return _run_tool(
+            lambda: mcp_converters.convert_document_blocks(
+                services.get_document_blocks(request.document_id)
+            )
+        )
+
+    @mcp.tool(description="Return DOCX paragraphs with style and heading metadata.")
+    def get_paragraphs(document_id: str) -> ParagraphsResult:
+        request = SemanticDocumentRequest.model_validate({"document_id": document_id})
+        return _run_tool(
+            lambda: mcp_converters.convert_paragraphs(services.get_paragraphs(request.document_id))
+        )
+
+    @mcp.tool(description="Return DOCX tables as structured row and cell arrays.")
+    def get_tables(document_id: str) -> TablesResult:
+        request = SemanticDocumentRequest.model_validate({"document_id": document_id})
+        return _run_tool(
+            lambda: mcp_converters.convert_tables(services.get_tables(request.document_id))
+        )
+
+    @mcp.tool(description="Return the full semantic payload for one DOCX block.")
+    def get_block_bundle(document_id: str, block_index: int) -> BlockBundleResult:
+        request = BlockRequest.model_validate(
+            {"document_id": document_id, "block_index": block_index}
+        )
+        return _run_tool(
+            lambda: mcp_converters.convert_block_bundle(
+                services.get_block_bundle(request.document_id, request.block_index)
+            )
+        )
+
     @mcp.tool(description="Replace indexed text content in a DOCX or PPTX item.")
     def replace_text(
         document_id: str,
@@ -214,6 +349,119 @@ def build_mcp_server(config: AppConfig):
             return WriteResult.from_patch_result(result)
 
         return _run_tool(runner)
+
+    @mcp.tool(description="Append a logical row to an indexed workbook worksheet.")
+    def append_row(
+        document_id: str,
+        sheet_name: str,
+        values: list[str] | None = None,
+        record: dict[str, str] | None = None,
+        output_mode: str = "versioned",
+    ) -> StructuredWriteToolResult:
+        request = AppendRowRequest.model_validate(
+            {
+                "document_id": document_id,
+                "sheet_name": sheet_name,
+                "values": values,
+                "record": record,
+                "output_mode": output_mode,
+            }
+        )
+        return _run_tool(
+            lambda: mcp_converters.convert_structured_write_result(
+                services.append_row(
+                    request.document_id,
+                    request.sheet_name,
+                    values=request.values,
+                    record=request.record,
+                    output_mode=request.output_mode,
+                )
+            )
+        )
+
+    @mcp.tool(description="Write multiple logical rows to an indexed workbook worksheet.")
+    def write_table(
+        document_id: str,
+        sheet_name: str,
+        rows: list[list[str]] | None = None,
+        records: list[dict[str, str]] | None = None,
+        column_mapping: dict[str, str] | None = None,
+        output_mode: str = "versioned",
+    ) -> StructuredWriteToolResult:
+        request = WriteTableRequest.model_validate(
+            {
+                "document_id": document_id,
+                "sheet_name": sheet_name,
+                "rows": rows,
+                "records": records,
+                "column_mapping": column_mapping,
+                "output_mode": output_mode,
+            }
+        )
+        return _run_tool(
+            lambda: mcp_converters.convert_structured_write_result(
+                services.write_table(
+                    request.document_id,
+                    request.sheet_name,
+                    rows=request.rows,
+                    records=request.records,
+                    column_mapping=request.column_mapping,
+                    output_mode=request.output_mode,
+                )
+            )
+        )
+
+    @mcp.tool(description="Append a new paragraph block to an indexed Word document.")
+    def append_paragraph(
+        document_id: str,
+        text: str,
+        style_name: str | None = None,
+        output_mode: str = "versioned",
+    ) -> StructuredWriteToolResult:
+        request = AppendParagraphRequest.model_validate(
+            {
+                "document_id": document_id,
+                "text": text,
+                "style_name": style_name,
+                "output_mode": output_mode,
+            }
+        )
+        return _run_tool(
+            lambda: mcp_converters.convert_structured_write_result(
+                services.append_paragraph(
+                    request.document_id,
+                    request.text,
+                    style_name=request.style_name,
+                    output_mode=request.output_mode,
+                )
+            )
+        )
+
+    @mcp.tool(description="Replace a paragraph block in an indexed Word document.")
+    def replace_block(
+        document_id: str,
+        block_index: int,
+        text: str,
+        output_mode: str = "versioned",
+    ) -> StructuredWriteToolResult:
+        request = ReplaceBlockRequest.model_validate(
+            {
+                "document_id": document_id,
+                "block_index": block_index,
+                "text": text,
+                "output_mode": output_mode,
+            }
+        )
+        return _run_tool(
+            lambda: mcp_converters.convert_structured_write_result(
+                services.replace_block(
+                    request.document_id,
+                    request.block_index,
+                    request.text,
+                    output_mode=request.output_mode,
+                )
+            )
+        )
 
     @mcp.tool(description="Write a cell value in an indexed XLSX workbook.")
     def write_cell(

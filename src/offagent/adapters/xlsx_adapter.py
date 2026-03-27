@@ -4,16 +4,27 @@ from dataclasses import dataclass
 from pathlib import Path
 import re
 
-from offagent.domain.models import IndexedItem, XlsxRowEmbedding, XlsxRowEmbeddingCell
+from offagent.domain.models import (
+    DocumentRef,
+    IndexedItem,
+    SheetCell,
+    SheetSnapshot,
+    WorkbookStructure,
+    WorksheetSummary,
+    XlsxRowEmbedding,
+    XlsxRowEmbeddingCell,
+)
 from offagent.errors import InvalidArgumentsError, TargetNotEditableError
 from offagent.errors import TargetNotFoundError
 
 try:
     from openpyxl import load_workbook
-    from openpyxl.utils.cell import coordinate_to_tuple
+    from openpyxl.utils.cell import coordinate_to_tuple, get_column_letter, range_boundaries
 except ModuleNotFoundError:  # pragma: no cover - exercised through dependency checks
     load_workbook = None
     coordinate_to_tuple = None
+    get_column_letter = None
+    range_boundaries = None
 
 
 @dataclass(frozen=True)
@@ -201,6 +212,176 @@ def resolve_cell(document_path: Path, item_id: str) -> ResolvedCell:
     )
 
 
+def get_workbook_structure(document_path: Path) -> WorkbookStructure:
+    workbook = _open_workbook(document_path)
+    sheets: list[WorksheetSummary] = []
+
+    for position, worksheet in enumerate(workbook.worksheets):
+        used_bounds = _used_bounds(worksheet)
+        preview = ""
+        if used_bounds is not None:
+            min_row, min_col, max_row, max_col = used_bounds
+            for row in worksheet.iter_rows(
+                min_row=min_row,
+                max_row=max_row,
+                min_col=min_col,
+                max_col=max_col,
+            ):
+                for cell in row:
+                    text = _display_text(cell).strip()
+                    if text:
+                        preview = text[:120]
+                        break
+                if preview:
+                    break
+        sheets.append(
+            WorksheetSummary(
+                position=position,
+                sheet_name=worksheet.title,
+                preview=preview,
+                metadata={
+                    "used_range": _format_range(used_bounds),
+                    "max_row": worksheet.max_row,
+                    "max_column": worksheet.max_column,
+                },
+            )
+        )
+
+    return WorkbookStructure(document=_document_ref(document_path), sheets=tuple(sheets))
+
+
+def get_sheet_snapshot(
+    document_path: Path,
+    sheet_name: str,
+    *,
+    cell_range: str | None = None,
+    start_cell: str | None = None,
+    row_count: int | None = None,
+    column_count: int | None = None,
+) -> SheetSnapshot:
+    workbook = _open_workbook(document_path)
+    worksheet = _resolve_worksheet(workbook, sheet_name)
+    bounds = _snapshot_bounds(
+        worksheet,
+        cell_range=cell_range,
+        start_cell=start_cell,
+        row_count=row_count,
+        column_count=column_count,
+    )
+
+    cells: list[SheetCell] = []
+    if bounds is not None:
+        min_row, min_col, max_row, max_col = bounds
+        for row in worksheet.iter_rows(
+            min_row=min_row,
+            max_row=max_row,
+            min_col=min_col,
+            max_col=max_col,
+        ):
+            for cell in row:
+                cells.append(
+                    SheetCell(
+                        coordinate=cell.coordinate,
+                        row=cell.row,
+                        column=cell.column,
+                        display_value=_display_text(cell),
+                        metadata={
+                            "raw_value": cell.value,
+                            "formula": _formula_text(cell),
+                            "data_type": cell.data_type,
+                        },
+                    )
+                )
+
+    return SheetSnapshot(
+        document=_document_ref(document_path),
+        sheet_name=worksheet.title,
+        cells=tuple(cells),
+        metadata={
+            "range": _format_range(bounds),
+            "row_count": 0 if bounds is None else bounds[2] - bounds[0] + 1,
+            "column_count": 0 if bounds is None else bounds[3] - bounds[1] + 1,
+        },
+    )
+
+
+def append_row(
+    document_path: Path,
+    sheet_name: str,
+    *,
+    values: list[str] | None = None,
+    record: dict[str, str] | None = None,
+    output_path: Path | None = None,
+) -> tuple[Path, int, tuple[str, ...]]:
+    if (values is None) == (record is None):
+        raise InvalidArgumentsError("append_row requires exactly one of values or record.")
+
+    workbook = _open_workbook(document_path)
+    worksheet = _resolve_worksheet(workbook, sheet_name)
+    target_row = _last_used_row(worksheet) + 1
+    written_coordinates: list[str] = []
+
+    if values is not None:
+        for column_index, value in enumerate(values, start=1):
+            coordinate = f"{get_column_letter(column_index)}{target_row}"
+            worksheet[coordinate] = _coerce_value(value)
+            written_coordinates.append(coordinate)
+    else:
+        header_map = _header_map(worksheet)
+        if not header_map:
+            raise InvalidArgumentsError(
+                "append_row record writes require an existing header row in the worksheet."
+            )
+        for key, value in record.items():
+            if key not in header_map:
+                raise InvalidArgumentsError(f"Unknown worksheet header for append_row: {key}")
+            coordinate = f"{get_column_letter(header_map[key])}{target_row}"
+            worksheet[coordinate] = _coerce_value(value)
+            written_coordinates.append(coordinate)
+
+    target_path = _target_path(document_path, output_path)
+    workbook.save(target_path)
+    return target_path, target_row, tuple(written_coordinates)
+
+
+def write_table(
+    document_path: Path,
+    sheet_name: str,
+    *,
+    rows: list[list[str]] | None = None,
+    records: list[dict[str, str]] | None = None,
+    column_mapping: dict[str, str] | None = None,
+    output_path: Path | None = None,
+) -> tuple[Path, int, int]:
+    if (rows is None) == (records is None):
+        raise InvalidArgumentsError("write_table requires exactly one of rows or records.")
+
+    workbook = _open_workbook(document_path)
+    worksheet = _resolve_worksheet(workbook, sheet_name)
+    start_row = _last_used_row(worksheet) + 1
+
+    if rows is not None:
+        for row_offset, row_values in enumerate(rows):
+            for column_index, value in enumerate(row_values, start=1):
+                worksheet.cell(row=start_row + row_offset, column=column_index).value = _coerce_value(value)
+        end_row = start_row + len(rows) - 1
+    else:
+        resolved_mapping = _resolve_record_mapping(worksheet, column_mapping)
+        for row_offset, record in enumerate(records):
+            for key, value in record.items():
+                if key not in resolved_mapping:
+                    raise InvalidArgumentsError(f"Unknown worksheet mapping for write_table field: {key}")
+                worksheet.cell(
+                    row=start_row + row_offset,
+                    column=resolved_mapping[key],
+                ).value = _coerce_value(value)
+        end_row = start_row + len(records) - 1
+
+    target_path = _target_path(document_path, output_path)
+    workbook.save(target_path)
+    return target_path, start_row, end_row
+
+
 def parse_item_id(item_id: str) -> tuple[str, str]:
     if not item_id.startswith("sheet:"):
         raise InvalidArgumentsError(f"Unsupported XLSX item id: {item_id}")
@@ -226,15 +407,31 @@ def _open_workbook(document_path: Path):
     return load_workbook(str(document_path))
 
 
+def _document_ref(document_path: Path) -> DocumentRef:
+    resolved_path = document_path.resolve()
+    stat = resolved_path.stat()
+    return DocumentRef(
+        document_id=resolved_path.as_posix(),
+        path=resolved_path,
+        file_type="xlsx",
+        display_name=resolved_path.name,
+        modified_time=stat.st_mtime,
+    )
+
+
 def _resolve_cell(workbook, item_id: str):
     sheet_name, coordinate = parse_item_id(item_id)
+    worksheet = _resolve_worksheet(workbook, sheet_name)
+    return worksheet[coordinate]
+
+
+def _resolve_worksheet(workbook, sheet_name: str):
     try:
-        worksheet = workbook[sheet_name]
+        return workbook[sheet_name]
     except KeyError as exc:
         raise TargetNotFoundError(
             f"Worksheet {sheet_name!r} does not exist in the workbook."
         ) from exc
-    return worksheet[coordinate]
 
 
 def _is_indexable_cell(cell) -> bool:
@@ -342,3 +539,92 @@ def _build_row_embedding_text(
         for cell in contributing_cells
     )
     return "\n".join(lines)
+
+
+def _used_bounds(worksheet) -> tuple[int, int, int, int] | None:
+    used_cells = [cell for row in worksheet.iter_rows() for cell in row if _is_indexable_cell(cell)]
+    if not used_cells:
+        return None
+    min_row = min(cell.row for cell in used_cells)
+    min_col = min(cell.column for cell in used_cells)
+    max_row = max(cell.row for cell in used_cells)
+    max_col = max(cell.column for cell in used_cells)
+    return (min_row, min_col, max_row, max_col)
+
+
+def _snapshot_bounds(
+    worksheet,
+    *,
+    cell_range: str | None,
+    start_cell: str | None,
+    row_count: int | None,
+    column_count: int | None,
+) -> tuple[int, int, int, int] | None:
+    if cell_range is not None:
+        if start_cell is not None or row_count is not None or column_count is not None:
+            raise InvalidArgumentsError("sheet snapshot range and window inputs are mutually exclusive.")
+        if range_boundaries is None:
+            raise RuntimeError("openpyxl is required for XLSX operations.")
+        min_col, min_row, max_col, max_row = range_boundaries(cell_range)
+        return (min_row, min_col, max_row, max_col)
+
+    if start_cell is not None or row_count is not None or column_count is not None:
+        if start_cell is None or row_count is None or column_count is None:
+            raise InvalidArgumentsError(
+                "sheet snapshot windows require start_cell, row_count, and column_count together."
+            )
+        start_row, start_column = _coordinate_sort_key(start_cell)
+        return (
+            start_row,
+            start_column,
+            start_row + row_count - 1,
+            start_column + column_count - 1,
+        )
+
+    return _used_bounds(worksheet)
+
+
+def _format_range(bounds: tuple[int, int, int, int] | None) -> str | None:
+    if bounds is None or get_column_letter is None:
+        return None
+    min_row, min_col, max_row, max_col = bounds
+    return f"{get_column_letter(min_col)}{min_row}:{get_column_letter(max_col)}{max_row}"
+
+
+def _last_used_row(worksheet) -> int:
+    bounds = _used_bounds(worksheet)
+    return 0 if bounds is None else bounds[2]
+
+
+def _header_map(worksheet) -> dict[str, int]:
+    header_map: dict[str, int] = {}
+    for cell in worksheet[1]:
+        header = _display_text(cell).strip()
+        if header:
+            header_map[header] = cell.column
+    return header_map
+
+
+def _resolve_record_mapping(worksheet, column_mapping: dict[str, str] | None) -> dict[str, int]:
+    if column_mapping is None:
+        return _header_map(worksheet)
+
+    header_map = _header_map(worksheet)
+    resolved: dict[str, int] = {}
+    for field_name, target in column_mapping.items():
+        normalized_target = target.strip()
+        if normalized_target in header_map:
+            resolved[field_name] = header_map[normalized_target]
+            continue
+        if _is_column_reference(normalized_target):
+            if coordinate_to_tuple is None:
+                raise RuntimeError("openpyxl is required for XLSX operations.")
+            _, column_number = coordinate_to_tuple(f"{normalized_target.upper()}1")
+            resolved[field_name] = column_number
+            continue
+        raise InvalidArgumentsError(f"Unknown worksheet header in column_mapping: {target}")
+    return resolved
+
+
+def _is_column_reference(value: str) -> bool:
+    return bool(re.fullmatch(r"[A-Za-z]+", value))
