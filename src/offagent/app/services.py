@@ -17,28 +17,42 @@ from offagent.app.progress import NullProgressReporter, ProgressReporter
 from offagent.config import AppConfig
 from offagent.domain.models import (
     BlockBundle,
+    DocxTableEntry,
+    DocxTablesResult,
     DocumentBlock,
     DocumentBlocks,
     DocumentRef,
     DocumentStructure,
     FileType,
     IndexedItem,
+    InsertContentResult,
     ItemRef,
+    NodePayload,
+    NodeWriteResult,
     ParagraphCollection,
     PresentationStructure,
     SearchHit,
     SearchMode,
+    SectionPayload,
     SheetSnapshot,
     SlideNotes,
     StructureUnit,
+    StructureCollection,
     StructuredTarget,
     StructuredWriteResult,
     TableCollection,
     WorkbookStructure,
     WorksheetSummary,
+    XlsxInsertRowsResult,
     XlsxRowEmbedding,
 )
-from offagent.errors import InvalidArgumentsError, NoEmbeddingsError, PolicyRefusedError, StaleLocatorError
+from offagent.errors import (
+    InvalidArgumentsError,
+    NoEmbeddingsError,
+    PolicyRefusedError,
+    StaleLocatorError,
+    TargetNotEditableError,
+)
 from offagent.errors import TargetNotFoundError
 from offagent.indexing import store
 from offagent.path_policy import (
@@ -202,6 +216,175 @@ class AppServices:
             )
 
         return DocumentStructure(document=document, units=units)
+
+    def get_structure(self, document_id: str) -> StructureCollection:
+        document = self.get_document(document_id)
+        if document.file_type == "docx":
+            sections = docx_adapter.resolve_structure(document.path)
+        elif document.file_type == "pptx":
+            sections = pptx_adapter.resolve_structure(document.path)
+        else:
+            sections = xlsx_adapter.resolve_structure(document.path)
+        return StructureCollection(document=document, sections=sections)
+
+    def get_section(
+        self,
+        document_id: str,
+        section_id: str,
+        *,
+        cell_range: str | None = None,
+    ) -> SectionPayload:
+        document = self.get_document(document_id)
+        if document.file_type == "docx":
+            return replace(docx_adapter.get_section(document.path, section_id), document=document)
+        if document.file_type == "pptx":
+            return replace(pptx_adapter.get_section(document.path, section_id), document=document)
+        return replace(
+            xlsx_adapter.get_section(document.path, section_id, cell_range=cell_range),
+            document=document,
+        )
+
+    def get_node(self, document_id: str, node_id: str) -> NodePayload:
+        document = self.get_document(document_id)
+        if document.file_type == "docx":
+            item_type, text, metadata = docx_adapter.read_node(document.path, node_id)
+        elif document.file_type == "pptx":
+            item_type, text, metadata = pptx_adapter.read_node(document.path, node_id)
+        else:
+            item_type, text, metadata = xlsx_adapter.read_node(document.path, node_id)
+        return NodePayload(
+            document_id=document.document_id,
+            node_id=node_id,
+            item_type=item_type,
+            text=text,
+            metadata=metadata,
+        )
+
+    def write_node(
+        self,
+        document_id: str,
+        node_id: str,
+        content: str,
+        *,
+        output_mode: OutputMode = "versioned",
+    ) -> NodeWriteResult:
+        document = self.get_document(document_id)
+        source_hash = _content_hash(document.path)
+        output_path = self._resolve_write_output_path(document.path, output_mode=output_mode)
+        try:
+            previous = self.get_node(document_id, node_id)
+            if document.file_type == "docx":
+                output_path = docx_adapter.write_node(document.path, node_id, content, output_path)
+            elif document.file_type == "pptx":
+                output_path = pptx_adapter.write_node(document.path, node_id, content, output_path)
+            else:
+                output_path = xlsx_adapter.write_node(document.path, node_id, content, output_path)
+        except (InvalidArgumentsError, TargetNotFoundError, TargetNotEditableError) as exc:
+            if source_hash != document.content_hash:
+                raise StaleLocatorError(
+                    f"stale locator: {node_id} is no longer valid for {document.path}"
+                ) from exc
+            raise
+
+        output_document = self.index_document(output_path)
+        new_text = self.get_node(output_document.document_id, node_id).text
+
+        return NodeWriteResult(
+            document_path=document.path,
+            output_path=output_path,
+            document_id=output_document.document_id,
+            node_id=node_id,
+            new_text=new_text,
+            previous_text=previous.text,
+        )
+
+    def insert_content(
+        self,
+        document_id: str,
+        content: str,
+        *,
+        style_name: str | None = None,
+        after_node_id: str | None = None,
+        output_mode: OutputMode = "versioned",
+    ) -> InsertContentResult:
+        document = self._require_document_type(document_id, expected="docx", operation="insert_content")
+        output_path = self._resolve_write_output_path(document.path, output_mode=output_mode)
+        output_path, new_node_id = docx_adapter.insert_paragraph(
+            document.path,
+            content,
+            style_name=style_name,
+            after_locator=after_node_id,
+            output_path=output_path,
+        )
+        output_document = self.index_document(output_path)
+        node = self.get_node(output_document.document_id, new_node_id)
+        return InsertContentResult(
+            document_path=document.path,
+            output_path=output_path,
+            document_id=output_document.document_id,
+            new_node_id=new_node_id,
+            preview=node.text[:120],
+        )
+
+    def xlsx_insert_rows(
+        self,
+        document_id: str,
+        sheet_name: str,
+        *,
+        rows: list[list[str]] | None = None,
+        records: list[dict[str, str]] | None = None,
+        output_mode: OutputMode = "versioned",
+    ) -> XlsxInsertRowsResult:
+        document = self._require_document_type(
+            document_id,
+            expected="xlsx",
+            operation="xlsx_insert_rows",
+        )
+        output_path = self._resolve_write_output_path(document.path, output_mode=output_mode)
+        if rows is not None:
+            output_path, start_row, _ = xlsx_adapter.write_table(
+                document.path,
+                sheet_name,
+                rows=rows,
+                output_path=output_path,
+            )
+            rows_inserted = len(rows)
+        else:
+            if records is None:
+                raise InvalidArgumentsError("xlsx_insert_rows requires either rows or records.")
+            output_path, start_row, _ = xlsx_adapter.write_table(
+                document.path,
+                sheet_name,
+                records=records,
+                output_path=output_path,
+            )
+            rows_inserted = len(records)
+        output_document = self.index_document(output_path)
+        first_row_locator = xlsx_adapter.make_item_id(sheet_name, f"A{start_row}")
+        return XlsxInsertRowsResult(
+            document_path=document.path,
+            output_path=output_path,
+            document_id=output_document.document_id,
+            rows_inserted=rows_inserted,
+            first_row_locator=first_row_locator,
+        )
+
+    def docx_get_tables(self, document_id: str) -> DocxTablesResult:
+        document = self._require_document_type(document_id, expected="docx", operation="docx_get_tables")
+        tables = tuple(
+            DocxTableEntry(
+                locator=docx_adapter.make_table_cell_locator(table.table_index, 0, 0),
+                table_index=table.table_index,
+                rows=table.rows,
+                preview=table.preview,
+                metadata={
+                    "block_index": table.block_index,
+                    **table.metadata,
+                },
+            )
+            for table in docx_adapter.get_tables(document.path)
+        )
+        return DocxTablesResult(document=document, tables=tables)
 
     def get_presentation_structure(self, document_id: str) -> PresentationStructure:
         document = self._require_document_type(document_id, expected="pptx", operation="get_presentation_structure")

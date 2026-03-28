@@ -2,14 +2,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from offagent.domain.models import (
     BlockBundle,
+    DocxRun,
     DocxParagraph,
+    DocxTableCell,
     DocxTable,
     DocumentBlock,
     DocumentRef,
     IndexedItem,
+    SectionPayload,
+    StructureSection,
 )
 from offagent.errors import InvalidArgumentsError, TargetNotEditableError, TargetNotFoundError
 
@@ -40,6 +45,25 @@ class RunFormatting:
     font_name: str | None
     font_size: int | None
     color_rgb: str | None
+
+
+@dataclass(frozen=True)
+class ResolvedParagraphTarget:
+    block_index: int
+    paragraph_index: int
+    paragraph: Paragraph
+
+
+@dataclass(frozen=True)
+class ResolvedTableCellTarget:
+    block_index: int
+    table_index: int
+    row_index: int
+    column_index: int
+    table: Table
+
+
+ResolvedTarget = ResolvedParagraphTarget | ResolvedTableCellTarget
 
 
 def extract_document(document_path: Path) -> list[IndexedItem]:
@@ -98,6 +122,221 @@ def append_paragraph(document_path: Path, item_id: str, text: str, output_path: 
     target_path = _target_path(document_path, output_path)
     document.save(target_path)
     return target_path
+
+
+def make_table_cell_locator(table_index: int, row_index: int, column_index: int) -> str:
+    return f"table:{table_index}:cell:{row_index}:{column_index}"
+
+
+def parse_table_cell_locator(locator: str) -> tuple[int, int, int]:
+    parts = locator.split(":")
+    if len(parts) != 5 or parts[0] != "table" or parts[2] != "cell":
+        raise InvalidArgumentsError(f"Unsupported DOCX table cell locator: {locator}")
+    try:
+        table_index = int(parts[1])
+        row_index = int(parts[3])
+        column_index = int(parts[4])
+    except ValueError as exc:
+        raise InvalidArgumentsError(f"Invalid DOCX table cell locator: {locator}") from exc
+    return table_index, row_index, column_index
+
+
+def resolve_structure(document_path: Path) -> tuple[StructureSection, ...]:
+    document = _open_document(document_path)
+    sections: list[StructureSection] = []
+
+    paragraph_index = 0
+    table_index = 0
+    for block_index, (block_type, block) in enumerate(_iter_blocks(document)):
+        if block_type == "paragraph":
+            paragraph_model = _paragraph_model(block, block_index, paragraph_index)
+            sections.append(
+                StructureSection(
+                    locator=f"para:{paragraph_index}",
+                    section_type="paragraph",
+                    preview=paragraph_model.preview,
+                    metadata={
+                        "block_index": block_index,
+                        "block_type": "paragraph",
+                        "paragraph_index": paragraph_index,
+                        "style_name": paragraph_model.style_name,
+                        "is_heading": paragraph_model.is_heading,
+                    },
+                )
+            )
+            paragraph_index += 1
+            continue
+
+        table_model = _table_model(block, block_index, table_index)
+        sections.append(
+            StructureSection(
+                locator=make_table_cell_locator(table_index, 0, 0),
+                section_type="table",
+                preview=table_model.preview,
+                metadata={
+                    "block_index": block_index,
+                    "block_type": "table",
+                    "table_index": table_index,
+                    "row_count": len(table_model.rows),
+                    "column_count": max((len(row) for row in table_model.rows), default=0),
+                },
+            )
+        )
+        table_index += 1
+
+    return tuple(sections)
+
+
+def get_section(document_path: Path, locator: str) -> SectionPayload:
+    document = _open_document(document_path)
+    resolved = _resolve_locator(document, locator)
+    document_ref = _document_ref(document_path)
+
+    if isinstance(resolved, ResolvedParagraphTarget):
+        paragraph_model = _paragraph_model(
+            resolved.paragraph,
+            resolved.block_index,
+            resolved.paragraph_index,
+        )
+        return SectionPayload(
+            document=document_ref,
+            locator=f"para:{resolved.paragraph_index}",
+            section_type="paragraph",
+            preview=paragraph_model.preview,
+            metadata={
+                "block_index": resolved.block_index,
+                "block_type": "paragraph",
+                "paragraph_index": resolved.paragraph_index,
+            },
+            block_type="paragraph",
+            text=paragraph_model.text,
+            style_name=paragraph_model.style_name,
+            is_heading=paragraph_model.is_heading,
+            runs=tuple(_run_model(run) for run in resolved.paragraph.runs),
+        )
+
+    table_model = _table_model(resolved.table, resolved.block_index, resolved.table_index)
+    cells = tuple(
+        DocxTableCell(
+            locator=make_table_cell_locator(resolved.table_index, row_index, column_index),
+            row_index=row_index,
+            column_index=column_index,
+            text=cell.text,
+            metadata={},
+        )
+        for row_index, row in enumerate(resolved.table.rows)
+        for column_index, cell in enumerate(row.cells)
+    )
+    return SectionPayload(
+        document=document_ref,
+        locator=make_table_cell_locator(resolved.table_index, 0, 0),
+        section_type="table",
+        preview=table_model.preview,
+        metadata={
+            "block_index": resolved.block_index,
+            "block_type": "table",
+            "table_index": resolved.table_index,
+            "row_count": len(table_model.rows),
+            "column_count": max((len(row) for row in table_model.rows), default=0),
+        },
+        block_type="table",
+        rows=table_model.rows,
+        table_cells=cells,
+    )
+
+
+def read_node(document_path: Path, locator: str) -> tuple[str, str, dict[str, object]]:
+    document = _open_document(document_path)
+    resolved = _resolve_locator(document, locator)
+
+    if isinstance(resolved, ResolvedParagraphTarget):
+        paragraph_model = _paragraph_model(
+            resolved.paragraph,
+            resolved.block_index,
+            resolved.paragraph_index,
+        )
+        return (
+            "paragraph",
+            paragraph_model.text,
+            {
+                "block_index": resolved.block_index,
+                "paragraph_index": resolved.paragraph_index,
+                "style_name": paragraph_model.style_name,
+                "is_heading": paragraph_model.is_heading,
+            },
+        )
+
+    cell = resolved.table.rows[resolved.row_index].cells[resolved.column_index]
+    return (
+        "table_cell",
+        cell.text,
+        {
+            "block_index": resolved.block_index,
+            "table_index": resolved.table_index,
+            "row_index": resolved.row_index,
+            "column_index": resolved.column_index,
+        },
+    )
+
+
+def write_node(document_path: Path, locator: str, text: str, output_path: Path | None = None) -> Path:
+    document = _open_document(document_path)
+    resolved = _resolve_locator(document, locator)
+
+    if isinstance(resolved, ResolvedParagraphTarget):
+        return replace_paragraph(document_path, f"para:{resolved.paragraph_index}", text, output_path)
+
+    cell = resolved.table.rows[resolved.row_index].cells[resolved.column_index]
+    cell.text = text
+    target_path = _target_path(document_path, output_path)
+    document.save(target_path)
+    return target_path
+
+
+def insert_paragraph(
+    document_path: Path,
+    text: str,
+    *,
+    style_name: str | None = None,
+    after_locator: str | None = None,
+    output_path: Path | None = None,
+) -> tuple[Path, str]:
+    if after_locator is None:
+        target_path, block_index = append_paragraph_block(
+            document_path,
+            text,
+            style_name=style_name,
+            output_path=output_path,
+        )
+        paragraph_count = len(get_paragraphs(target_path))
+        return target_path, f"para:{paragraph_count - 1}"
+
+    document = _open_document(document_path)
+    resolved = _resolve_locator(document, after_locator)
+    paragraph_index = (
+        resolved.paragraph_index + 1
+        if isinstance(resolved, ResolvedParagraphTarget)
+        else _paragraphs_before_block(document, resolved.block_index)
+    )
+
+    anchor_element = (
+        resolved.paragraph._element
+        if isinstance(resolved, ResolvedParagraphTarget)
+        else resolved.table._element
+    )
+    new_element = document.element.body.add_p()
+    anchor_element.addnext(new_element)
+    paragraph = Paragraph(new_element, document)
+    paragraph.add_run(text)
+    if style_name is not None:
+        try:
+            paragraph.style = style_name
+        except (KeyError, ValueError) as exc:
+            raise InvalidArgumentsError(f"Unknown DOCX paragraph style: {style_name}") from exc
+
+    target_path = _target_path(document_path, output_path)
+    document.save(target_path)
+    return target_path, f"para:{paragraph_index}"
 
 
 def get_blocks(document_path: Path) -> tuple[DocumentBlock, ...]:
@@ -257,6 +496,10 @@ def replace_block(document_path: Path, block_index: int, text: str, output_path:
     raise TargetNotFoundError(f"Block {block_index} does not exist in the document.")
 
 
+def get_tables_result(document_path: Path) -> tuple[DocxTable, ...]:
+    return get_tables(document_path)
+
+
 def _open_document(document_path: Path):
     if Document is None:
         raise RuntimeError("python-docx is required for DOCX operations.")
@@ -290,6 +533,54 @@ def _resolve_paragraph(document, item_id: str):
         raise TargetNotFoundError(
             f"Paragraph {paragraph_index} does not exist in the document."
         ) from exc
+
+
+def _resolve_locator(document, locator: str) -> ResolvedTarget:
+    normalized = locator.strip()
+    if normalized.startswith("para:"):
+        paragraph_index = _parse_paragraph_locator(normalized)
+        current_paragraph_index = 0
+        for block_index, (block_type, block) in enumerate(_iter_blocks(document)):
+            if block_type != "paragraph":
+                continue
+            if current_paragraph_index == paragraph_index:
+                return ResolvedParagraphTarget(
+                    block_index=block_index,
+                    paragraph_index=paragraph_index,
+                    paragraph=block,
+                )
+            current_paragraph_index += 1
+        raise TargetNotFoundError(f"Paragraph {paragraph_index} does not exist in the document.")
+
+    table_index, row_index, column_index = parse_table_cell_locator(normalized)
+    current_table_index = 0
+    for block_index, (block_type, block) in enumerate(_iter_blocks(document)):
+        if block_type != "table":
+            continue
+        if current_table_index == table_index:
+            try:
+                block.rows[row_index].cells[column_index]
+            except IndexError as exc:
+                raise TargetNotFoundError(
+                    f"Table cell {table_index}:{row_index}:{column_index} does not exist."
+                ) from exc
+            return ResolvedTableCellTarget(
+                block_index=block_index,
+                table_index=table_index,
+                row_index=row_index,
+                column_index=column_index,
+                table=block,
+            )
+        current_table_index += 1
+
+    raise TargetNotFoundError(f"Table {table_index} does not exist in the document.")
+
+
+def _parse_paragraph_locator(locator: str) -> int:
+    try:
+        return int(locator.split(":", maxsplit=1)[1])
+    except ValueError as exc:
+        raise InvalidArgumentsError(f"Invalid DOCX paragraph item id: {locator}") from exc
 
 
 def _capture_run_formatting(run: Run | None) -> RunFormatting | None:
@@ -381,3 +672,36 @@ def _table_model(table, block_index: int, table_index: int) -> DocxTable:
         preview=preview,
         metadata={},
     )
+
+
+def _run_model(run) -> DocxRun:
+    color_rgb = None
+    if run.font.color.rgb is not None:
+        color_rgb = str(run.font.color.rgb)
+
+    font_size = None
+    if run.font.size is not None:
+        font_size = int(run.font.size)
+
+    return DocxRun(
+        text=run.text,
+        bold=run.bold,
+        italic=run.italic,
+        underline=run.underline,
+        strike=run.font.strike,
+        font_name=run.font.name,
+        font_size=font_size,
+        color_rgb=color_rgb,
+    )
+
+
+def _paragraphs_before_block(document, block_index: int) -> int:
+    count = 0
+    for current_block_index, (block_type, _) in enumerate(_iter_blocks(document)):
+        if current_block_index > block_index:
+            break
+        if current_block_index == block_index:
+            break
+        if block_type == "paragraph":
+            count += 1
+    return count

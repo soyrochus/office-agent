@@ -6,7 +6,7 @@ from openpyxl import Workbook, load_workbook
 
 from offagent.app.services import AppServices
 from offagent.config import AppConfig
-from offagent.errors import InvalidArgumentsError, TargetNotEditableError
+from offagent.errors import InvalidArgumentsError
 
 
 def _services(tmp_path):
@@ -27,67 +27,77 @@ def test_semantic_service_reads_across_formats(sample_docx, sample_pptx, sample_
     pptx_document = services.index_document(sample_pptx)
     xlsx_document = services.index_document(sample_xlsx)
 
-    docx_structure = services.get_document_structure(docx_document.document_id)
-    pptx_structure = services.get_document_structure(pptx_document.document_id)
-    xlsx_structure = services.get_document_structure(xlsx_document.document_id)
-    slide_bundle = services.get_slide_bundle(pptx_document.document_id, 1)
-    block_bundle = services.get_block_bundle(docx_document.document_id, 4)
-    sheet_snapshot = services.get_sheet_snapshot(
-        xlsx_document.document_id,
-        "Notes 2026",
-        start_cell="A1",
-        row_count=2,
-        column_count=2,
+    docx_structure = services.get_structure(docx_document.document_id)
+    pptx_structure = services.get_structure(pptx_document.document_id)
+    xlsx_structure = services.get_structure(xlsx_document.document_id)
+    docx_section = services.get_section(docx_document.document_id, "para:0")
+    pptx_section = services.get_section(
+        pptx_document.document_id,
+        pptx_structure.sections[0].locator,
     )
+    xlsx_section = services.get_section(
+        xlsx_document.document_id,
+        xlsx_structure.sections[1].locator,
+        cell_range="A1:B2",
+    )
+    table_section = services.get_section(docx_document.document_id, "table:0:cell:0:0")
+    docx_tables = services.docx_get_tables(docx_document.document_id)
+    node = services.get_node(docx_document.document_id, "para:3")
 
-    assert [unit.unit_type for unit in docx_structure.units] == [
+    assert [section.section_type for section in docx_structure.sections] == [
         "paragraph",
         "paragraph",
         "paragraph",
         "paragraph",
         "table",
     ]
-    assert [unit.unit_type for unit in pptx_structure.units] == ["slide", "slide"]
-    assert [unit.metadata["sheet_name"] for unit in xlsx_structure.units] == ["Budget2026", "Notes 2026"]
-    assert slide_bundle.notes_text == "Speaker notes: confirm launch owner."
-    assert block_bundle.table is not None
-    assert block_bundle.table.rows[0][0] == "Table text to ignore"
-    assert [cell.coordinate for cell in sheet_snapshot.cells] == ["A1", "B1", "A2", "B2"]
+    assert [section.section_type for section in pptx_structure.sections] == ["slide", "slide"]
+    assert [section.metadata["sheet_name"] for section in xlsx_structure.sections] == [
+        "Budget2026",
+        "Notes 2026",
+    ]
+    assert docx_section.text == "Project Heading"
+    assert pptx_section.notes_text == "Speaker notes: confirm launch owner."
+    assert [cell.coordinate for cell in xlsx_section.cells] == ["A1", "B1", "A2", "B2"]
+    assert table_section.rows[0][0] == "Table text to ignore"
+    assert docx_tables.tables[0].locator == "table:0:cell:0:0"
+    assert node.text == "Supplier shall deliver by Friday."
 
 
-def test_semantic_service_writes_return_structured_results_without_reindex(sample_docx, sample_xlsx, tmp_path) -> None:
+def test_semantic_service_writes_return_reindexed_results(sample_docx, sample_xlsx, tmp_path) -> None:
     services = _services(tmp_path)
     docx_document = services.index_document(sample_docx)
     xlsx_document = services.index_document(sample_xlsx)
 
-    append_result = services.append_paragraph(
+    write_result = services.write_node(
         docx_document.document_id,
-        "Semantic appendix paragraph.",
-        style_name="Heading 2",
-    )
-    replace_result = services.replace_block(
-        docx_document.document_id,
-        1,
+        "para:1",
         "Semantic replacement paragraph.",
     )
-    append_row_result = services.append_row(
+    insert_result = services.insert_content(
+        write_result.document_id,
+        "Semantic appendix paragraph.",
+        style_name="Heading 2",
+        after_node_id="para:1",
+    )
+    append_rows_result = services.xlsx_insert_rows(
         xlsx_document.document_id,
         "Notes 2026",
-        values=["Escalate owner", "Finance"],
+        rows=[["Escalate owner", "Finance"]],
     )
 
-    appended_document = Document(str(append_result.output_path))
-    replaced_document = Document(str(replace_result.output_path))
-    appended_workbook = load_workbook(append_row_result.output_path)
+    replaced_document = Document(str(write_result.output_path))
+    inserted_document = Document(str(insert_result.output_path))
+    appended_workbook = load_workbook(append_rows_result.output_path)
 
-    assert append_result.target.identifier == "block:5"
-    assert append_result.target.metadata["block_type"] == "paragraph"
-    assert appended_document.paragraphs[-1].text == "Semantic appendix paragraph."
-    assert appended_document.paragraphs[-1].style.name == "Heading 2"
+    assert write_result.previous_text == "Alpha paragraph for search."
     assert replaced_document.paragraphs[1].text == "Semantic replacement paragraph."
-    assert append_row_result.target.identifier == "Notes 2026!row:3"
+    assert insert_result.new_node_id == "para:2"
+    assert inserted_document.paragraphs[2].text == "Semantic appendix paragraph."
+    assert inserted_document.paragraphs[2].style.name == "Heading 2"
+    assert append_rows_result.first_row_locator == "sheet:Notes 2026!A3"
     assert appended_workbook["Notes 2026"]["A3"].value == "Escalate owner"
-    assert services.search_corpus("Semantic appendix paragraph", file_type="docx") == []
+    assert services.get_node(insert_result.document_id, insert_result.new_node_id).text == "Semantic appendix paragraph."
 
 
 def test_semantic_service_rejects_unsupported_targets(sample_docx, sample_xlsx, tmp_path) -> None:
@@ -95,17 +105,17 @@ def test_semantic_service_rejects_unsupported_targets(sample_docx, sample_xlsx, 
     docx_document = services.index_document(sample_docx)
     xlsx_document = services.index_document(sample_xlsx)
 
-    with pytest.raises(TargetNotEditableError, match="table block replacement"):
-        services.replace_block(docx_document.document_id, 4, "blocked")
-
     with pytest.raises(InvalidArgumentsError, match="requires a .xlsx document"):
-        services.append_row(docx_document.document_id, "Sheet1", values=["blocked"])
+        services.xlsx_insert_rows(docx_document.document_id, "Sheet1", rows=[["blocked"]])
 
     with pytest.raises(InvalidArgumentsError, match="requires a .docx document"):
-        services.get_document_blocks(xlsx_document.document_id)
+        services.insert_content(xlsx_document.document_id, "blocked")
+
+    with pytest.raises(InvalidArgumentsError, match="requires a .docx document"):
+        services.docx_get_tables(xlsx_document.document_id)
 
 
-def test_semantic_service_write_table_supports_mapped_records(tmp_path) -> None:
+def test_semantic_service_xlsx_insert_rows_supports_mapped_records(tmp_path) -> None:
     services = _services(tmp_path)
     workbook_path = tmp_path / "mapped.xlsx"
     workbook = Workbook()
@@ -116,17 +126,17 @@ def test_semantic_service_write_table_supports_mapped_records(tmp_path) -> None:
     workbook.save(workbook_path)
     document = services.index_document(workbook_path)
 
-    result = services.write_table(
+    result = services.xlsx_insert_rows(
         document.document_id,
         "Tasks",
         records=[
-            {"task": "Review budget", "owner": "Finance"},
-            {"task": "Confirm launch", "owner": "Operations"},
+            {"Task": "Review budget", "Owner": "Finance"},
+            {"Task": "Confirm launch", "Owner": "Operations"},
         ],
-        column_mapping={"task": "Task", "owner": "Owner"},
     )
 
     written_workbook = load_workbook(result.output_path)
-    assert result.target.identifier == "Tasks!rows:2-3"
+    assert result.first_row_locator == "sheet:Tasks!A2"
+    assert result.rows_inserted == 2
     assert written_workbook["Tasks"]["A2"].value == "Review budget"
     assert written_workbook["Tasks"]["B3"].value == "Operations"

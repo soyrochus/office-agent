@@ -240,3 +240,133 @@ class StructuredWriteResult:
     output_path: Path
     target: StructuredTarget
     summary: str
+
+
+@dataclass(frozen=True)
+class StructureSection:
+    locator: str
+    section_type: str
+    preview: str
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class StructureCollection:
+    document: DocumentRef
+    sections: tuple[StructureSection, ...]
+
+
+@dataclass(frozen=True)
+class DocxRun:
+    text: str
+    bold: bool | None
+    italic: bool | None
+    underline: bool | None
+    strike: bool | None
+    font_name: str | None
+    font_size: int | None
+    color_rgb: str | None
+
+
+@dataclass(frozen=True)
+class DocxTableCell:
+    locator: str
+    row_index: int
+    column_index: int
+    text: str
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class PptxTextBlockNode:
+    locator: str
+    position: int
+    shape_id: int
+    shape_name: str | None
+    preview: str
+    text: str
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class XlsxSectionCell:
+    locator: str
+    coordinate: str
+    row: int
+    column: int
+    display_value: str
+    formula: str | None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class SectionPayload:
+    document: DocumentRef
+    locator: str
+    section_type: str
+    preview: str
+    metadata: dict[str, Any] = field(default_factory=dict)
+    block_type: str | None = None
+    text: str | None = None
+    style_name: str | None = None
+    is_heading: bool | None = None
+    runs: tuple[DocxRun, ...] = ()
+    rows: tuple[tuple[str, ...], ...] = ()
+    table_cells: tuple[DocxTableCell, ...] = ()
+    slide_number: int | None = None
+    notes_text: str | None = None
+    text_blocks: tuple[PptxTextBlockNode, ...] = ()
+    sheet_name: str | None = None
+    cells: tuple[XlsxSectionCell, ...] = ()
+
+
+@dataclass(frozen=True)
+class NodePayload:
+    document_id: str
+    node_id: str
+    item_type: str
+    text: str
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class NodeWriteResult:
+    document_path: Path
+    output_path: Path
+    document_id: str
+    node_id: str
+    new_text: str
+    previous_text: str
+
+
+@dataclass(frozen=True)
+class InsertContentResult:
+    document_path: Path
+    output_path: Path
+    document_id: str
+    new_node_id: str
+    preview: str
+
+
+@dataclass(frozen=True)
+class XlsxInsertRowsResult:
+    document_path: Path
+    output_path: Path
+    document_id: str
+    rows_inserted: int
+    first_row_locator: str
+
+
+@dataclass(frozen=True)
+class DocxTableEntry:
+    locator: str
+    table_index: int
+    rows: tuple[tuple[str, ...], ...]
+    preview: str
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class DocxTablesResult:
+    document: DocumentRef
+    tables: tuple[DocxTableEntry, ...]

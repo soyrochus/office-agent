@@ -53,23 +53,20 @@ def test_semantic_mcp_tools_are_discoverable_and_schema_backed(
             tools = await session.list_tools()
             tool_map = {tool.name: tool for tool in tools.tools}
             expected_tools = {
-                "get_document_structure",
-                "get_presentation_structure",
-                "get_slide_bundle",
-                "get_slide_notes",
-                "get_workbook_structure",
-                "get_sheet_snapshot",
-                "get_document_blocks",
-                "get_paragraphs",
-                "get_tables",
-                "get_block_bundle",
-                "append_row",
-                "write_table",
-                "append_paragraph",
-                "replace_block",
+                "index_documents",
+                "refresh_document",
+                "list_documents",
+                "search_documents",
+                "get_structure",
+                "get_section",
+                "get_node",
+                "write_node",
+                "insert_content",
+                "xlsx_insert_rows",
+                "docx_get_tables",
             }
 
-            assert expected_tools <= set(tool_map)
+            assert expected_tools == set(tool_map)
             assert all(tool_map[name].inputSchema is not None for name in expected_tools)
             assert all(tool_map[name].outputSchema is not None for name in expected_tools)
 
@@ -83,135 +80,163 @@ def test_semantic_mcp_tools_are_discoverable_and_schema_backed(
 
             docx_structure = await _call_tool(
                 session,
-                "get_document_structure",
+                "get_structure",
                 {"document_id": docs_by_type["docx"]["document_id"]},
             )
-            pptx_bundle = await _call_tool(
+            pptx_structure = await _call_tool(
                 session,
-                "get_slide_bundle",
-                {"document_id": docs_by_type["pptx"]["document_id"], "slide_number": 1},
+                "get_structure",
+                {"document_id": docs_by_type["pptx"]["document_id"]},
             )
-            slide_notes = await _call_tool(
+            xlsx_structure = await _call_tool(
                 session,
-                "get_slide_notes",
-                {"document_id": docs_by_type["pptx"]["document_id"], "slide_number": 2},
-            )
-            xlsx_snapshot = await _call_tool(
-                session,
-                "get_sheet_snapshot",
-                {
-                    "document_id": docs_by_type["xlsx"]["document_id"],
-                    "sheet_name": "Notes 2026",
-                    "start_cell": "A1",
-                    "row_count": 2,
-                    "column_count": 2,
-                },
-            )
-            block_bundle = await _call_tool(
-                session,
-                "get_block_bundle",
-                {"document_id": docs_by_type["docx"]["document_id"], "block_index": 4},
+                "get_structure",
+                {"document_id": docs_by_type["xlsx"]["document_id"]},
             )
 
-            append_paragraph = await _call_tool(
+            table_section = await _call_tool(
                 session,
-                "append_paragraph",
+                "get_section",
                 {
                     "document_id": docs_by_type["docx"]["document_id"],
-                    "text": "Semantic MCP paragraph.",
+                    "section_id": docx_structure["sections"][-1]["locator"],
+                },
+            )
+            slide_section = await _call_tool(
+                session,
+                "get_section",
+                {
+                    "document_id": docs_by_type["pptx"]["document_id"],
+                    "section_id": pptx_structure["sections"][0]["locator"],
+                },
+            )
+            sheet_section = await _call_tool(
+                session,
+                "get_section",
+                {
+                    "document_id": docs_by_type["xlsx"]["document_id"],
+                    "section_id": xlsx_structure["sections"][1]["locator"],
+                    "cell_range": "A1:B2",
+                },
+            )
+            tables_result = await _call_tool(
+                session,
+                "docx_get_tables",
+                {"document_id": docs_by_type["docx"]["document_id"]},
+            )
+            node_result = await _call_tool(
+                session,
+                "get_node",
+                {"document_id": docs_by_type["docx"]["document_id"], "node_id": "para:0"},
+            )
+            write_result = await _call_tool(
+                session,
+                "write_node",
+                {
+                    "document_id": docs_by_type["docx"]["document_id"],
+                    "node_id": "para:1",
+                    "content": "Semantic MCP replacement.",
+                },
+            )
+            insert_result = await _call_tool(
+                session,
+                "insert_content",
+                {
+                    "document_id": write_result["document_id"],
+                    "content": "Semantic MCP paragraph.",
                     "style_name": "Heading 2",
+                    "after_node_id": "para:1",
                 },
             )
-            replace_block = await _call_tool(
+            append_rows = await _call_tool(
                 session,
-                "replace_block",
-                {
-                    "document_id": docs_by_type["docx"]["document_id"],
-                    "block_index": 1,
-                    "text": "Semantic MCP replacement.",
-                },
-            )
-            append_row = await _call_tool(
-                session,
-                "append_row",
+                "xlsx_insert_rows",
                 {
                     "document_id": docs_by_type["xlsx"]["document_id"],
                     "sheet_name": "Notes 2026",
-                    "values": ["Semantic note", "Finance"],
-                },
-            )
-            write_table = await _call_tool(
-                session,
-                "write_table",
-                {
-                    "document_id": docs_by_type["xlsx"]["document_id"],
-                    "sheet_name": "Notes 2026",
-                    "rows": [["Alpha", "Owner"], ["Beta", "Approver"]],
+                    "rows": [["Semantic note", "Finance"]],
                 },
             )
 
             return {
                 "docx_structure": docx_structure,
-                "pptx_bundle": pptx_bundle,
-                "slide_notes": slide_notes,
-                "xlsx_snapshot": xlsx_snapshot,
-                "block_bundle": block_bundle,
-                "append_paragraph": append_paragraph,
-                "replace_block": replace_block,
-                "append_row": append_row,
-                "write_table": write_table,
+                "pptx_structure": pptx_structure,
+                "xlsx_structure": xlsx_structure,
+                "table_section": table_section,
+                "slide_section": slide_section,
+                "sheet_section": sheet_section,
+                "tables_result": tables_result,
+                "node_result": node_result,
+                "insert_result": insert_result,
+                "append_rows": append_rows,
             }
 
         return run()
 
     result = _run_mcp(config_path, scenario)
 
-    assert [unit["unit_type"] for unit in result["docx_structure"]["units"]] == [
+    assert [section["section_type"] for section in result["docx_structure"]["sections"]] == [
         "paragraph",
         "paragraph",
         "paragraph",
         "paragraph",
         "table",
     ]
-    assert result["pptx_bundle"]["notes_text"] == "Speaker notes: confirm launch owner."
-    assert result["slide_notes"]["notes_text"] == "Speaker notes: review action list."
-    assert [cell["coordinate"] for cell in result["xlsx_snapshot"]["cells"]] == ["A1", "B1", "A2", "B2"]
-    assert result["block_bundle"]["table"]["rows"] == [["Table text to ignore"]]
-    assert result["append_paragraph"]["target"]["identifier"] == "block:5"
-    assert result["replace_block"]["target"]["identifier"] == "block:1"
-    assert result["append_row"]["target"]["identifier"] == "Notes 2026!row:3"
-    assert result["write_table"]["target"]["identifier"] == "Notes 2026!rows:3-4"
+    assert [section["slide_number"] for section in result["pptx_structure"]["sections"]] == [1, 2]
+    assert [section["sheet_name"] for section in result["xlsx_structure"]["sections"]] == [
+        "Budget2026",
+        "Notes 2026",
+    ]
+    assert result["table_section"]["rows"] == [["Table text to ignore"]]
+    assert result["slide_section"]["notes_text"] == "Speaker notes: confirm launch owner."
+    assert [cell["coordinate"] for cell in result["sheet_section"]["cells"]] == ["A1", "B1", "A2", "B2"]
+    assert result["tables_result"]["tables"][0]["locator"] == "table:0:cell:0:0"
+    assert result["node_result"]["text"] == "Project Heading"
+    assert result["append_rows"]["first_row_locator"] == "sheet:Notes 2026!A3"
 
-    appended_document = Document(result["append_paragraph"]["output_path"])
-    replaced_document = Document(result["replace_block"]["output_path"])
-    append_workbook = load_workbook(result["append_row"]["output_path"])
-    table_workbook = load_workbook(result["write_table"]["output_path"])
-    assert appended_document.paragraphs[-1].text == "Semantic MCP paragraph."
-    assert replaced_document.paragraphs[1].text == "Semantic MCP replacement."
-    assert append_workbook["Notes 2026"]["A3"].value == "Semantic note"
-    assert table_workbook["Notes 2026"]["A3"].value == "Alpha"
+    inserted_document = Document(result["insert_result"]["output_path"])
+    appended_workbook = load_workbook(result["append_rows"]["output_path"])
+    assert inserted_document.paragraphs[2].text == "Semantic MCP paragraph."
+    assert inserted_document.paragraphs[2].style.name == "Heading 2"
+    assert appended_workbook["Notes 2026"]["A3"].value == "Semantic note"
+    assert appended_workbook["Notes 2026"]["B3"].value == "Finance"
 
 
-def test_semantic_mcp_reports_format_specific_errors(sample_docx, config_path) -> None:
+def test_semantic_mcp_reports_format_specific_errors(sample_docx, sample_pptx, sample_xlsx, config_path) -> None:
     def scenario(session: ClientSession):
         async def run():
-            await _call_tool(session, "index_documents", {"paths": [str(sample_docx)]})
+            await _call_tool(
+                session,
+                "index_documents",
+                {"paths": [str(sample_docx), str(sample_pptx), str(sample_xlsx)]},
+            )
             documents = await _call_tool(session, "list_documents")
-            document = documents["documents"][0]
+            docs_by_type = {document["file_type"]: document for document in documents["documents"]}
 
-            unsupported = await session.call_tool(
-                "append_row",
-                {"document_id": document["document_id"], "sheet_name": "Sheet1", "values": ["blocked"]},
+            unsupported_rows = await session.call_tool(
+                "xlsx_insert_rows",
+                {
+                    "document_id": docs_by_type["docx"]["document_id"],
+                    "sheet_name": "Sheet1",
+                    "rows": [["blocked"]],
+                },
             )
-            assert unsupported.isError
-            assert "requires a .xlsx document" in _tool_error_text(unsupported)
+            assert unsupported_rows.isError
+            assert "requires a .xlsx document" in _tool_error_text(unsupported_rows)
 
-            table_replace = await session.call_tool(
-                "replace_block",
-                {"document_id": document["document_id"], "block_index": 4, "text": "blocked"},
+            unsupported_insert = await session.call_tool(
+                "insert_content",
+                {"document_id": docs_by_type["pptx"]["document_id"], "content": "blocked"},
             )
-            assert table_replace.isError
-            assert "table block replacement" in _tool_error_text(table_replace)
+            assert unsupported_insert.isError
+            assert "requires a .docx document" in _tool_error_text(unsupported_insert)
+
+            unsupported_tables = await session.call_tool(
+                "docx_get_tables",
+                {"document_id": docs_by_type["xlsx"]["document_id"]},
+            )
+            assert unsupported_tables.isError
+            assert "requires a .docx document" in _tool_error_text(unsupported_tables)
 
         return run()
 

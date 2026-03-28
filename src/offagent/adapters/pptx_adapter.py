@@ -7,8 +7,11 @@ from offagent.domain.models import (
     DocumentRef,
     IndexedItem,
     PresentationSlideSummary,
+    PptxTextBlockNode,
+    SectionPayload,
     SlideBundle,
     SlideTextBlock,
+    StructureSection,
 )
 from offagent.errors import InvalidArgumentsError, TargetNotEditableError as BaseTargetNotEditableError
 from offagent.errors import TargetNotFoundError
@@ -96,6 +99,10 @@ def append_text_shape(document_path: Path, item_id: str, text: str, output_path:
     return target_path
 
 
+def make_slide_locator(slide_number: int) -> str:
+    return f"slide:{slide_number}"
+
+
 def resolve_shape(document_path: Path, item_id: str) -> ResolvedShape:
     presentation = _open_presentation(document_path)
     shape = _resolve_shape(presentation, item_id)
@@ -109,6 +116,100 @@ def resolve_shape(document_path: Path, item_id: str) -> ResolvedShape:
         is_placeholder=bool(getattr(shape, "is_placeholder", False)),
         text=_text_frame_text(text_frame),
     )
+
+
+def resolve_structure(document_path: Path) -> tuple[StructureSection, ...]:
+    presentation = _open_presentation(document_path)
+    sections: list[StructureSection] = []
+
+    for slide_number, slide in enumerate(presentation.slides, start=1):
+        text_blocks = _slide_text_blocks(slide)
+        preview = next((block.text for block in text_blocks if block.text), "")
+        locator = (
+            make_item_id(slide_number, text_blocks[0].shape_id)
+            if text_blocks
+            else make_slide_locator(slide_number)
+        )
+        sections.append(
+            StructureSection(
+                locator=locator,
+                section_type="slide",
+                preview=preview[:120],
+                metadata={
+                    "slide_number": slide_number,
+                    "shape_count": len(slide.shapes),
+                    "text_block_count": len(text_blocks),
+                },
+            )
+        )
+
+    return tuple(sections)
+
+
+def get_section(document_path: Path, locator: str) -> SectionPayload:
+    slide_number = _slide_number_from_locator(locator)
+    bundle = get_slide_bundle(document_path, slide_number)
+    return SectionPayload(
+        document=bundle.document,
+        locator=locator if locator.startswith("slide:") else make_slide_locator(slide_number),
+        section_type="slide",
+        preview=bundle.preview,
+        metadata=bundle.metadata,
+        slide_number=bundle.slide_number,
+        notes_text=bundle.notes_text,
+        text_blocks=tuple(
+            PptxTextBlockNode(
+                locator=make_item_id(slide_number, block.shape_id),
+                position=block.position,
+                shape_id=block.shape_id,
+                shape_name=block.shape_name,
+                preview=block.preview,
+                text=block.text,
+                metadata=block.metadata,
+            )
+            for block in bundle.text_blocks
+        ),
+    )
+
+
+def read_node(document_path: Path, locator: str) -> tuple[str, str, dict[str, object]]:
+    normalized = locator.strip()
+    if normalized.startswith("slide:") and ":shape:" not in normalized:
+        slide_number = _slide_number_from_locator(normalized)
+        bundle = get_slide_bundle(document_path, slide_number)
+        text = "\n\n".join(block.text for block in bundle.text_blocks if block.text)
+        return (
+            "slide",
+            text,
+            {
+                "slide_number": slide_number,
+                "notes_text": bundle.notes_text,
+                "text_block_count": len(bundle.text_blocks),
+            },
+        )
+
+    resolved = resolve_shape(document_path, normalized)
+    return (
+        "slide_text_shape",
+        resolved.text,
+        {
+            "slide_number": resolved.slide_number,
+            "shape_id": resolved.shape_id,
+            "shape_index": resolved.shape_index,
+            "shape_name": resolved.shape_name,
+            "is_placeholder": resolved.is_placeholder,
+        },
+    )
+
+
+def write_node(document_path: Path, locator: str, text: str, output_path: Path | None = None) -> Path:
+    normalized = locator.strip()
+    if normalized.startswith("slide:") and ":shape:" not in normalized:
+        shape_locator = _first_text_shape_locator(document_path, _slide_number_from_locator(normalized))
+        if shape_locator is None:
+            raise TargetNotEditableError("slide has no editable text shapes")
+        return replace_text_shape(document_path, shape_locator, text, output_path)
+    return replace_text_shape(document_path, normalized, text, output_path)
 
 
 def get_presentation_structure(document_path: Path) -> tuple[PresentationSlideSummary, ...]:
@@ -258,6 +359,30 @@ def _slide_text_blocks(slide) -> list[SlideTextBlock]:
             )
         )
     return blocks
+
+
+def _slide_number_from_locator(locator: str) -> int:
+    normalized = locator.strip()
+    if normalized.startswith("slide:") and ":shape:" in normalized:
+        slide_number, _ = parse_item_id(normalized)
+        return slide_number
+    parts = normalized.split(":")
+    if len(parts) == 2 and parts[0] == "slide":
+        try:
+            slide_number = int(parts[1])
+        except ValueError as exc:
+            raise InvalidArgumentsError(f"Invalid slide locator: {locator}") from exc
+        if slide_number < 1:
+            raise InvalidArgumentsError(f"Invalid PPTX slide number: {slide_number}")
+        return slide_number
+    raise InvalidArgumentsError(f"Unsupported PPTX locator: {locator}")
+
+
+def _first_text_shape_locator(document_path: Path, slide_number: int) -> str | None:
+    bundle = get_slide_bundle(document_path, slide_number)
+    if not bundle.text_blocks:
+        return None
+    return make_item_id(slide_number, bundle.text_blocks[0].shape_id)
 
 
 def _notes_text(slide) -> str:

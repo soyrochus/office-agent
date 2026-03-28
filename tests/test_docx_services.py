@@ -51,24 +51,13 @@ def test_replace_append_and_reindex_docx(sample_docx, tmp_path) -> None:
     assert hits[0].document_path == append_result.output_path
 
 
-def test_replace_inplace_requires_opt_in_docx(sample_docx, tmp_path) -> None:
+def test_replace_inplace_is_allowed_by_default_docx(sample_docx, tmp_path) -> None:
     services = AppServices(
         AppConfig(index_path=tmp_path / "state" / "index.sqlite3", document_roots=(tmp_path,))
     )
     services.index_document(sample_docx)
 
-    with pytest.raises(RuntimeError, match="In-place overwrite is not enabled"):
-        services.replace_item_text(sample_docx, "para:1", "Blocked overwrite.", output_mode="inplace")
-
-    allowed_services = AppServices(
-        AppConfig(
-            index_path=tmp_path / "allowed" / "index.sqlite3",
-            document_roots=(tmp_path,),
-            allow_inplace_overwrite=True,
-        )
-    )
-    allowed_services.index_document(sample_docx)
-    result = allowed_services.replace_item_text(
+    result = services.replace_item_text(
         sample_docx,
         "para:1",
         "Allowed overwrite.",
@@ -78,3 +67,17 @@ def test_replace_inplace_requires_opt_in_docx(sample_docx, tmp_path) -> None:
     document = Document(str(sample_docx))
     assert result.output_path == sample_docx
     assert document.paragraphs[1].text == "Allowed overwrite."
+
+
+def test_replace_inplace_can_be_disabled_explicitly_docx(sample_docx, tmp_path) -> None:
+    services = AppServices(
+        AppConfig(
+            index_path=tmp_path / "state" / "index.sqlite3",
+            document_roots=(tmp_path,),
+            allow_inplace_overwrite=False,
+        )
+    )
+    services.index_document(sample_docx)
+
+    with pytest.raises(RuntimeError, match="In-place overwrite is not enabled"):
+        services.replace_item_text(sample_docx, "para:1", "Blocked overwrite.", output_mode="inplace")

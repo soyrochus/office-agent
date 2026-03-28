@@ -48,19 +48,21 @@ def test_mcp_lists_tools_and_runs_docx_flow(sample_docx, config_path) -> None:
         async def run():
             tools = await session.list_tools()
             tool_map = {tool.name: tool for tool in tools.tools}
-            assert {
+            assert set(tool_map) == {
                 "index_documents",
                 "refresh_document",
                 "list_documents",
                 "search_documents",
-                "locate_item",
-                "read_item",
-                "replace_text",
-                "append_text",
-                "write_cell",
-            } <= set(tool_map)
-            assert tool_map["search_documents"].inputSchema
-            assert tool_map["search_documents"].outputSchema
+                "get_structure",
+                "get_section",
+                "get_node",
+                "write_node",
+                "insert_content",
+                "xlsx_insert_rows",
+                "docx_get_tables",
+            }
+            assert all(tool.inputSchema is not None for tool in tool_map.values())
+            assert all(tool.outputSchema is not None for tool in tool_map.values())
 
             index_result = await _call_tool(
                 session,
@@ -81,36 +83,64 @@ def test_mcp_lists_tools_and_runs_docx_flow(sample_docx, config_path) -> None:
             hit = search_result["hits"][0]
             assert hit["item_id"] == "para:3"
 
-            locate_result = await _call_tool(
+            node_result = await _call_tool(
                 session,
-                "locate_item",
-                {"document_id": document["document_id"], "locator": hit["locator"]},
+                "get_node",
+                {"document_id": document["document_id"], "node_id": hit["locator"]},
             )
-            assert locate_result["item"]["item_id"] == "para:3"
+            assert node_result["text"] == "Supplier shall deliver by Friday."
 
-            read_result = await _call_tool(
+            structure = await _call_tool(
                 session,
-                "read_item",
-                {"document_id": document["document_id"], "item_id": "para:3"},
+                "get_structure",
+                {"document_id": document["document_id"]},
             )
-            assert read_result["text"] == "Supplier shall deliver by Friday."
+            assert [section["section_type"] for section in structure["sections"]] == [
+                "paragraph",
+                "paragraph",
+                "paragraph",
+                "paragraph",
+                "table",
+            ]
+
+            table_locator = structure["sections"][-1]["locator"]
+            table_section = await _call_tool(
+                session,
+                "get_section",
+                {"document_id": document["document_id"], "section_id": table_locator},
+            )
+            assert table_section["rows"] == [["Table text to ignore"]]
 
             replace_result = await _call_tool(
                 session,
-                "replace_text",
+                "write_node",
                 {
                     "document_id": document["document_id"],
-                    "item_id": "para:1",
-                    "new_text": "MCP replaced text.",
+                    "node_id": "para:1",
+                    "content": "MCP replaced text.",
                 },
+            )
+            blank_node = await _call_tool(
+                session,
+                "get_node",
+                {"document_id": replace_result["document_id"], "node_id": "para:2"},
             )
             append_result = await _call_tool(
                 session,
-                "append_text",
+                "write_node",
                 {
-                    "document_id": replace_result["item"]["document_id"],
-                    "item_id": "para:2",
-                    "text_to_add": "MCP appended text.",
+                    "document_id": replace_result["document_id"],
+                    "node_id": "para:2",
+                    "content": f'{blank_node["text"]}MCP appended text.',
+                },
+            )
+            insert_result = await _call_tool(
+                session,
+                "insert_content",
+                {
+                    "document_id": append_result["document_id"],
+                    "content": "Inserted after refactor.",
+                    "style_name": "Heading 2",
                 },
             )
 
@@ -121,18 +151,20 @@ def test_mcp_lists_tools_and_runs_docx_flow(sample_docx, config_path) -> None:
             )
             assert refresh_result["files_indexed"] == 1
 
-            return append_result
+            return insert_result
 
         return run()
 
-    append_result = _run_mcp(config_path, scenario)
+    insert_result = _run_mcp(config_path, scenario)
 
     original_document = Document(str(sample_docx))
-    final_document = Document(append_result["output_path"])
+    final_document = Document(insert_result["output_path"])
     assert original_document.paragraphs[1].text == "Alpha paragraph for search."
     assert final_document.paragraphs[1].text == "MCP replaced text."
     assert final_document.paragraphs[1].runs[0].bold is True
     assert final_document.paragraphs[2].text == "MCP appended text."
+    assert final_document.paragraphs[-1].text == "Inserted after refactor."
+    assert final_document.paragraphs[-1].style.name == "Heading 2"
 
 
 def test_mcp_pptx_and_xlsx_round_trips(sample_pptx, sample_xlsx, config_path) -> None:
@@ -151,8 +183,8 @@ def test_mcp_pptx_and_xlsx_round_trips(sample_pptx, sample_xlsx, config_path) ->
             pptx_hit = pptx_search["hits"][0]
             pptx_read = await _call_tool(
                 session,
-                "read_item",
-                {"document_id": docs_by_type["pptx"]["document_id"], "item_id": pptx_hit["item_id"]},
+                "get_node",
+                {"document_id": docs_by_type["pptx"]["document_id"], "node_id": pptx_hit["item_id"]},
             )
             assert "Supplier shall present the rollout plan." in pptx_read["text"]
 
@@ -164,57 +196,84 @@ def test_mcp_pptx_and_xlsx_round_trips(sample_pptx, sample_xlsx, config_path) ->
             editable_item_id = editable_search["hits"][0]["item_id"]
             pptx_replace = await _call_tool(
                 session,
-                "replace_text",
+                "write_node",
                 {
                     "document_id": docs_by_type["pptx"]["document_id"],
-                    "item_id": editable_item_id,
-                    "new_text": "MCP updated speaker notes.",
+                    "node_id": editable_item_id,
+                    "content": "MCP updated speaker notes.",
                 },
             )
             pptx_append = await _call_tool(
                 session,
-                "append_text",
+                "write_node",
                 {
-                    "document_id": pptx_replace["item"]["document_id"],
-                    "item_id": editable_item_id,
-                    "text_to_add": "\nMCP appended action.",
+                    "document_id": pptx_replace["document_id"],
+                    "node_id": editable_item_id,
+                    "content": "MCP updated speaker notes.\nMCP appended action.",
                 },
             )
 
-            xlsx_search = await _call_tool(
+            xlsx_structure = await _call_tool(
                 session,
-                "search_documents",
-                {"query": "Supplier shall", "file_type": "xlsx"},
+                "get_structure",
+                {"document_id": docs_by_type["xlsx"]["document_id"]},
             )
-            xlsx_hit = xlsx_search["hits"][0]
-            xlsx_locate = await _call_tool(
+            notes_locator = next(
+                section["locator"]
+                for section in xlsx_structure["sections"]
+                if section["sheet_name"] == "Notes 2026"
+            )
+            xlsx_section = await _call_tool(
                 session,
-                "locate_item",
-                {"document_id": docs_by_type["xlsx"]["document_id"], "locator": xlsx_hit["locator"]},
+                "get_section",
+                {
+                    "document_id": docs_by_type["xlsx"]["document_id"],
+                    "section_id": notes_locator,
+                    "cell_range": "A1:A2",
+                },
             )
-            assert xlsx_locate["item"]["item_id"] == "sheet:Notes 2026!A1"
+            assert [cell["coordinate"] for cell in xlsx_section["cells"]] == ["A1", "A2"]
 
             xlsx_write = await _call_tool(
                 session,
-                "write_cell",
+                "write_node",
                 {
                     "document_id": docs_by_type["xlsx"]["document_id"],
-                    "sheet": "Budget2026",
-                    "cell": "B2",
-                    "value": "125001",
+                    "node_id": "sheet:Budget2026!B2",
+                    "content": "125001",
+                },
+            )
+            note_node = await _call_tool(
+                session,
+                "get_node",
+                {
+                    "document_id": xlsx_write["document_id"],
+                    "node_id": "sheet:Notes 2026!A2",
                 },
             )
             xlsx_append = await _call_tool(
                 session,
-                "append_text",
+                "write_node",
                 {
-                    "document_id": xlsx_write["item"]["document_id"],
-                    "item_id": "sheet:Notes 2026!B5",
-                    "text_to_add": "MCP added note.",
+                    "document_id": xlsx_write["document_id"],
+                    "node_id": "sheet:Notes 2026!A2",
+                    "content": f'{note_node["text"]} MCP added note.',
+                },
+            )
+            inserted_rows = await _call_tool(
+                session,
+                "xlsx_insert_rows",
+                {
+                    "document_id": xlsx_append["document_id"],
+                    "sheet_name": "Notes 2026",
+                    "rows": [["Row note", "Finance"]],
                 },
             )
 
-            return {"pptx_output": pptx_append["output_path"], "xlsx_output": xlsx_append["output_path"]}
+            return {
+                "pptx_output": pptx_append["output_path"],
+                "xlsx_output": inserted_rows["output_path"],
+            }
 
         return run()
 
@@ -222,11 +281,14 @@ def test_mcp_pptx_and_xlsx_round_trips(sample_pptx, sample_xlsx, config_path) ->
 
     presentation = Presentation(outputs["pptx_output"])
     editable_shape = next(shape for shape in presentation.slides[1].shapes if shape.has_text_frame)
-    assert editable_shape.text_frame.text == "MCP updated speaker notes.\nMCP appended action."
+    assert "MCP updated speaker notes." in editable_shape.text_frame.text
+    assert "MCP appended action." in editable_shape.text_frame.text
 
     workbook = load_workbook(outputs["xlsx_output"])
     assert workbook["Budget2026"]["B2"].value == 125001
-    assert workbook["Notes 2026"]["B5"].value == "MCP added note."
+    assert workbook["Notes 2026"]["A2"].value == "Follow up with finance. MCP added note."
+    assert workbook["Notes 2026"]["A3"].value == "Row note"
+    assert workbook["Notes 2026"]["B3"].value == "Finance"
 
 
 def test_mcp_returns_structured_errors(sample_docx, sample_xlsx, config_path) -> None:
@@ -236,24 +298,23 @@ def test_mcp_returns_structured_errors(sample_docx, sample_xlsx, config_path) ->
             documents_result = await _call_tool(session, "list_documents")
             docs_by_path = {document["path"]: document for document in documents_result["documents"]}
 
-            invalid_locator = await session.call_tool(
-                "locate_item",
-                {"document_id": docs_by_path[str(sample_docx)]["document_id"], "locator": "slide:1:shape:2"},
+            unsupported = await session.call_tool(
+                "insert_content",
+                {"document_id": docs_by_path[str(sample_xlsx)]["document_id"], "content": "blocked"},
             )
-            assert invalid_locator.isError
-            assert "DOCX locate_item expects" in _tool_error_text(invalid_locator)
+            assert unsupported.isError
+            assert "requires a .docx document" in _tool_error_text(unsupported)
 
             workbook = load_workbook(sample_xlsx)
             del workbook["Budget2026"]
             workbook.save(sample_xlsx)
 
             stale_result = await session.call_tool(
-                "write_cell",
+                "write_node",
                 {
                     "document_id": docs_by_path[str(sample_xlsx)]["document_id"],
-                    "sheet": "Budget2026",
-                    "cell": "B2",
-                    "value": "125001",
+                    "node_id": "sheet:Budget2026!B2",
+                    "content": "125001",
                 },
             )
             assert stale_result.isError

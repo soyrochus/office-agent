@@ -41,7 +41,7 @@ class AppConfig:
     allowed_roots: tuple[Path, ...] = ()
     output_directory: Path | None = None
     output_roots: tuple[Path, ...] = ()
-    allow_inplace_overwrite: bool = False
+    allow_inplace_overwrite: bool = True
     embedding_model: str = DEFAULT_EMBEDDING_MODEL
     embedding_dimensions: int = DEFAULT_EMBEDDING_DIMENSIONS
     vector_search_top_k: int = DEFAULT_VECTOR_SEARCH_TOP_K
@@ -66,7 +66,7 @@ def load_config(
         "allowed_roots": (),
         "output_directory": None,
         "output_roots": (),
-        "allow_inplace_overwrite": False,
+        "allow_inplace_overwrite": True,
         "embedding_model": DEFAULT_EMBEDDING_MODEL,
         "embedding_dimensions": DEFAULT_EMBEDDING_DIMENSIONS,
         "vector_search_top_k": DEFAULT_VECTOR_SEARCH_TOP_K,
@@ -181,7 +181,7 @@ def _load_file_values(config_path: Path) -> dict[str, object]:
         "allowed_roots": tuple(Path(root).expanduser() for root in allowed_roots),
         "output_directory": _optional_path(payload.get("output_directory")),
         "output_roots": tuple(Path(root).expanduser() for root in output_roots),
-        "allow_inplace_overwrite": bool(payload.get("allow_inplace_overwrite", False)),
+        "allow_inplace_overwrite": bool(payload.get("allow_inplace_overwrite", True)),
         "embedding_model": str(payload.get("embedding_model", DEFAULT_EMBEDDING_MODEL)),
         "embedding_dimensions": _coerce_int(
             payload.get("embedding_dimensions", DEFAULT_EMBEDDING_DIMENSIONS),

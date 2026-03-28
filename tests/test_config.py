@@ -69,7 +69,7 @@ def test_uses_defaults_when_no_config_is_present() -> None:
     assert str(config.index_path).endswith(".offagent/index.sqlite3")
     assert config.output_directory is None
     assert config.output_roots == ()
-    assert config.allow_inplace_overwrite is False
+    assert config.allow_inplace_overwrite is True
     assert config.embedding_model == "BAAI/bge-small-en-v1.5"
     assert config.embedding_dimensions == 384
     assert config.vector_search_top_k == 20

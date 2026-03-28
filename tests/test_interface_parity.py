@@ -118,29 +118,23 @@ def test_cli_and_mcp_parity_for_docx_cycle(tmp_path) -> None:
                 "search_documents",
                 {"query": "Supplier shall", "file_type": "docx"},
             )
-            locate_result = await _call_tool(
+            node_result = await _call_tool(
                 session,
-                "locate_item",
-                {"document_id": document["document_id"], "locator": search_result["hits"][0]["locator"]},
-            )
-            read_result = await _call_tool(
-                session,
-                "read_item",
-                {"document_id": document["document_id"], "item_id": "para:3"},
+                "get_node",
+                {"document_id": document["document_id"], "node_id": search_result["hits"][0]["locator"]},
             )
             replace_result = await _call_tool(
                 session,
-                "replace_text",
+                "write_node",
                 {
                     "document_id": document["document_id"],
-                    "item_id": "para:1",
-                    "new_text": "MCP parity text.",
+                    "node_id": "para:1",
+                    "content": "MCP parity text.",
                 },
             )
             return {
                 "search_item_id": search_result["hits"][0]["item_id"],
-                "locate_item_id": locate_result["item"]["item_id"],
-                "read_text": read_result["text"],
+                "read_text": node_result["text"],
                 "output_path": replace_result["output_path"],
             }
 
@@ -149,6 +143,5 @@ def test_cli_and_mcp_parity_for_docx_cycle(tmp_path) -> None:
     mcp_result = _run_mcp(mcp_config, scenario)
 
     assert mcp_result["search_item_id"] == "para:3"
-    assert mcp_result["locate_item_id"] == "para:3"
     assert mcp_result["read_text"] == "Supplier shall deliver by Friday."
     assert ".edited." in mcp_result["output_path"]

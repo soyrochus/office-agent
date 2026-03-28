@@ -125,7 +125,7 @@ document_roots = ["./docs"]
 allowed_roots = ["./docs", "./edited"]
 output_directory = "./edited"
 output_roots = ["./edited", "./docs"]
-allow_inplace_overwrite = false
+allow_inplace_overwrite = true
 embedding_model = "BAAI/bge-small-en-v1.5"
 embedding_dimensions = 384
 vector_search_top_k = 20
@@ -157,7 +157,7 @@ Configuration fields:
 - `allowed_roots`: canonical roots allowed for indexed read operations; empty means no read guard
 - `output_directory`: optional directory for versioned write outputs; defaults to the source document directory
 - `output_roots`: canonical roots allowed for write outputs; if omitted and `output_directory` is set, this defaults to that directory
-- `allow_inplace_overwrite`: when `true`, write commands may use `--output-mode inplace`; default is `false`
+- `allow_inplace_overwrite`: when `true`, write commands may use `--output-mode inplace`; default is `true`
 - `embedding_model`: embedding model name used when generating or querying vectors
 - `embedding_dimensions`: expected vector dimensionality for the configured model
 - `vector_search_top_k`: candidate pool size used by semantic and hybrid retrieval

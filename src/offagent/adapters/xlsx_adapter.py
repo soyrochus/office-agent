@@ -7,10 +7,13 @@ import re
 from offagent.domain.models import (
     DocumentRef,
     IndexedItem,
+    SectionPayload,
     SheetCell,
     SheetSnapshot,
+    StructureSection,
     WorkbookStructure,
     WorksheetSummary,
+    XlsxSectionCell,
     XlsxRowEmbedding,
     XlsxRowEmbeddingCell,
 )
@@ -210,6 +213,75 @@ def resolve_cell(document_path: Path, item_id: str) -> ResolvedCell:
         formula=_formula_text(cell),
         display_text=_display_text(cell),
     )
+
+
+def resolve_structure(document_path: Path) -> tuple[StructureSection, ...]:
+    workbook = _open_workbook(document_path)
+    sections: list[StructureSection] = []
+
+    for worksheet in workbook.worksheets:
+        anchor = _first_indexable_cell(worksheet)
+        locator = make_item_id(worksheet.title, anchor.coordinate if anchor is not None else "A1")
+        preview = "" if anchor is None else _display_text(anchor)[:120]
+        sections.append(
+            StructureSection(
+                locator=locator,
+                section_type="worksheet",
+                preview=preview,
+                metadata={
+                    "sheet_name": worksheet.title,
+                    "used_range": _format_range(_used_bounds(worksheet)),
+                    "max_row": worksheet.max_row,
+                    "max_column": worksheet.max_column,
+                    "cell_count": _cell_count(worksheet),
+                },
+            )
+        )
+
+    return tuple(sections)
+
+
+def get_section(document_path: Path, locator: str, *, cell_range: str | None = None) -> SectionPayload:
+    sheet_name, _ = parse_item_id(locator)
+    snapshot = get_sheet_snapshot(document_path, sheet_name, cell_range=cell_range)
+    return SectionPayload(
+        document=snapshot.document,
+        locator=locator,
+        section_type="worksheet",
+        preview=next((cell.display_value for cell in snapshot.cells if cell.display_value), ""),
+        metadata={**snapshot.metadata, "sheet_name": sheet_name},
+        sheet_name=sheet_name,
+        cells=tuple(
+            XlsxSectionCell(
+                locator=make_item_id(sheet_name, cell.coordinate),
+                coordinate=cell.coordinate,
+                row=cell.row,
+                column=cell.column,
+                display_value=cell.display_value,
+                formula=cell.metadata.get("formula"),
+                metadata=cell.metadata,
+            )
+            for cell in snapshot.cells
+        ),
+    )
+
+
+def read_node(document_path: Path, locator: str) -> tuple[str, str, dict[str, object]]:
+    resolved = resolve_cell(document_path, locator)
+    return (
+        "cell",
+        resolved.display_text,
+        {
+            "sheet_name": resolved.sheet_name,
+            "coordinate": resolved.coordinate,
+            "formula": resolved.formula,
+            "raw_value": resolved.raw_value,
+        },
+    )
+
+
+def write_node(document_path: Path, locator: str, value: str, output_path: Path | None = None) -> Path:
+    return write_cell(document_path, locator, value, output_path)
 
 
 def get_workbook_structure(document_path: Path) -> WorkbookStructure:
@@ -628,3 +700,15 @@ def _resolve_record_mapping(worksheet, column_mapping: dict[str, str] | None) ->
 
 def _is_column_reference(value: str) -> bool:
     return bool(re.fullmatch(r"[A-Za-z]+", value))
+
+
+def _first_indexable_cell(worksheet):
+    for row in worksheet.iter_rows():
+        for cell in row:
+            if _is_indexable_cell(cell):
+                return cell
+    return None
+
+
+def _cell_count(worksheet) -> int:
+    return sum(1 for row in worksheet.iter_rows() for cell in row if _is_indexable_cell(cell))
