@@ -3,13 +3,22 @@ from __future__ import annotations
 from pathlib import Path
 
 from rich.console import Console
-from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+    TimeElapsedColumn,
+)
 
 
 class RichProgressReporter:
     """Rich-based progress reporter for index and reindex commands."""
 
-    def __init__(self, *, console: Console | None = None, transient: bool = True) -> None:
+    def __init__(
+        self, *, console: Console | None = None, transient: bool = True
+    ) -> None:
         self._progress = Progress(
             SpinnerColumn(),
             TextColumn("{task.description}"),
@@ -31,7 +40,9 @@ class RichProgressReporter:
         self._progress.__exit__(*args)
 
     def on_index_start(self, total_files: int) -> None:
-        self._file_task_id = self._progress.add_task("Indexing", total=total_files, completed=0)
+        self._file_task_id = self._progress.add_task(
+            "Indexing", total=total_files, completed=0
+        )
 
     def on_file_start(self, path: Path, index: int, total: int) -> None:
         self._current_file_index = index
@@ -57,7 +68,9 @@ class RichProgressReporter:
             return
         description = f"Embedding {item_count} items"
         if self._embed_task_id is None:
-            self._embed_task_id = self._progress.add_task(description, total=item_count, completed=0)
+            self._embed_task_id = self._progress.add_task(
+                description, total=item_count, completed=0
+            )
             return
         self._progress.update(
             self._embed_task_id,

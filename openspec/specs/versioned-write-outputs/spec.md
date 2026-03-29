@@ -1,10 +1,7 @@
 ## Purpose
 
 Define the versioned-write-outputs capability for Office Agent.
-
 ## Requirements
-
-
 ### Requirement: Versioned write outputs by default
 The system SHALL write `replace`, `append`, and `write-cell` operations to versioned output files by default instead of overwriting the source document.
 
@@ -32,3 +29,15 @@ The system SHALL permit in-place overwrite only when configuration explicitly al
 #### Scenario: In-place overwrite is rejected without opt-in
 - **WHEN** a caller requests in-place overwrite and `allow_inplace_overwrite` is not enabled
 - **THEN** the system fails the write operation instead of overwriting the source document
+
+### Requirement: create_document follows the versioned-output convention
+The system SHALL apply the same versioned-output path logic to `create_document` as it does to all other write operations.
+
+#### Scenario: create_document with versioned mode produces a timestamped filename
+- **WHEN** `create_document` is called with `output_mode="versioned"`
+- **THEN** the written file path follows the `<name>.edited.<timestamp>.<ext>` convention, consistent with all other write operations
+
+#### Scenario: create_document with in-place mode writes to the exact path
+- **WHEN** `create_document` is called with `output_mode="inplace"` and `allow_inplace_overwrite` is enabled
+- **THEN** the file is written to the exact caller-specified path without timestamp decoration
+

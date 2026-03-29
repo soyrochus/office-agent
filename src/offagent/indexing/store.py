@@ -114,7 +114,9 @@ def connect(index_path: Path) -> sqlite3.Connection:
 def supports_fts5(connection: sqlite3.Connection) -> bool:
     table_name = "fts5_probe"
     try:
-        connection.execute(f"CREATE VIRTUAL TABLE {table_name} USING fts5(content_text)")
+        connection.execute(
+            f"CREATE VIRTUAL TABLE {table_name} USING fts5(content_text)"
+        )
         connection.execute(f"DROP TABLE {table_name}")
         return True
     except sqlite3.OperationalError:
@@ -151,7 +153,9 @@ def make_storage_id(document_id: str, item_id: str) -> str:
     return f"{document_id}:{item_id}"
 
 
-def make_xlsx_row_embedding_id(document_id: str, sheet_name: str, row_number: int) -> str:
+def make_xlsx_row_embedding_id(
+    document_id: str, sheet_name: str, row_number: int
+) -> str:
     return f"{document_id}:xlsx-row:{sheet_name}!{row_number}"
 
 
@@ -236,7 +240,9 @@ def replace_document_items(
         )
 
 
-def fetch_document_by_path(connection: sqlite3.Connection, document_path: Path) -> sqlite3.Row | None:
+def fetch_document_by_path(
+    connection: sqlite3.Connection, document_path: Path
+) -> sqlite3.Row | None:
     return connection.execute(
         """
         SELECT d.*, COUNT(i.storage_id) AS item_count
@@ -249,7 +255,9 @@ def fetch_document_by_path(connection: sqlite3.Connection, document_path: Path) 
     ).fetchone()
 
 
-def fetch_document_by_id(connection: sqlite3.Connection, document_id: str) -> sqlite3.Row | None:
+def fetch_document_by_id(
+    connection: sqlite3.Connection, document_id: str
+) -> sqlite3.Row | None:
     return connection.execute(
         """
         SELECT d.*, COUNT(i.storage_id) AS item_count
@@ -483,11 +491,17 @@ def has_item_embeddings(
         return connection.execute(sql, params).fetchone() is not None
 
     if file_type is None:
-        if has_item_embeddings(connection, file_type="docx", document_path=document_path):
+        if has_item_embeddings(
+            connection, file_type="docx", document_path=document_path
+        ):
             return True
-        if has_item_embeddings(connection, file_type="pptx", document_path=document_path):
+        if has_item_embeddings(
+            connection, file_type="pptx", document_path=document_path
+        ):
             return True
-        return has_item_embeddings(connection, file_type="xlsx", document_path=document_path)
+        return has_item_embeddings(
+            connection, file_type="xlsx", document_path=document_path
+        )
 
     sql = """
     SELECT 1
@@ -510,7 +524,9 @@ def has_item_embeddings(
     return connection.execute(sql, params).fetchone() is not None
 
 
-def delete_document_embeddings(connection: sqlite3.Connection, document_id: str) -> None:
+def delete_document_embeddings(
+    connection: sqlite3.Connection, document_id: str
+) -> None:
     delete_document_xlsx_row_embeddings(connection, document_id)
     connection.execute(
         """
@@ -521,7 +537,9 @@ def delete_document_embeddings(connection: sqlite3.Connection, document_id: str)
     )
 
 
-def delete_document_xlsx_row_embeddings(connection: sqlite3.Connection, document_id: str) -> None:
+def delete_document_xlsx_row_embeddings(
+    connection: sqlite3.Connection, document_id: str
+) -> None:
     connection.execute(
         """
         DELETE FROM xlsx_row_embedding_cells
@@ -630,7 +648,12 @@ def replace_xlsx_row_embeddings(
                 updated_at,
             ),
         )
-        for storage_id, cell_coordinate, cell_order, is_representative in contributing_cells:
+        for (
+            storage_id,
+            cell_coordinate,
+            cell_order,
+            is_representative,
+        ) in contributing_cells:
             connection.execute(
                 """
                 INSERT INTO xlsx_row_embedding_cells (

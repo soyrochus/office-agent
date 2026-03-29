@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
 
 from offagent.domain.locators import parse_locator, to_v2_locator
 from offagent.domain.models import (
@@ -27,7 +26,11 @@ from offagent.domain.text_fragments import (
     fragment_text,
     normalize_fragments,
 )
-from offagent.errors import InvalidArgumentsError, TargetNotEditableError, TargetNotFoundError
+from offagent.errors import (
+    InvalidArgumentsError,
+    TargetNotEditableError,
+    TargetNotFoundError,
+)
 
 try:
     from docx import Document
@@ -106,7 +109,9 @@ def read_paragraph(document_path: Path, item_id: str) -> str:
     return paragraph.text
 
 
-def replace_paragraph(document_path: Path, item_id: str, text: str, output_path: Path | None = None) -> Path:
+def replace_paragraph(
+    document_path: Path, item_id: str, text: str, output_path: Path | None = None
+) -> Path:
     document = _open_document(document_path)
     paragraph = _resolve_paragraph(document, item_id)
     formatting = _capture_run_formatting(paragraph.runs[0] if paragraph.runs else None)
@@ -118,7 +123,9 @@ def replace_paragraph(document_path: Path, item_id: str, text: str, output_path:
     return target_path
 
 
-def append_paragraph(document_path: Path, item_id: str, text: str, output_path: Path | None = None) -> Path:
+def append_paragraph(
+    document_path: Path, item_id: str, text: str, output_path: Path | None = None
+) -> Path:
     document = _open_document(document_path)
     paragraph = _resolve_paragraph(document, item_id)
     if paragraph.runs:
@@ -143,7 +150,9 @@ def parse_table_cell_locator(locator: str) -> tuple[int, int, int]:
         row_index = int(parts[3])
         column_index = int(parts[4])
     except ValueError as exc:
-        raise InvalidArgumentsError(f"Invalid DOCX table cell locator: {locator}") from exc
+        raise InvalidArgumentsError(
+            f"Invalid DOCX table cell locator: {locator}"
+        ) from exc
     return table_index, row_index, column_index
 
 
@@ -184,7 +193,9 @@ def resolve_structure(document_path: Path) -> tuple[StructureSection, ...]:
                     "block_type": "table",
                     "table_index": table_index,
                     "row_count": len(table_model.rows),
-                    "column_count": max((len(row) for row in table_model.rows), default=0),
+                    "column_count": max(
+                        (len(row) for row in table_model.rows), default=0
+                    ),
                 },
             )
         )
@@ -221,10 +232,14 @@ def get_section(document_path: Path, locator: str) -> SectionPayload:
             runs=tuple(_run_model(run) for run in resolved.paragraph.runs),
         )
 
-    table_model = _table_model(resolved.table, resolved.block_index, resolved.table_index)
+    table_model = _table_model(
+        resolved.table, resolved.block_index, resolved.table_index
+    )
     cells = tuple(
         DocxTableCell(
-            locator=make_table_cell_locator(resolved.table_index, row_index, column_index),
+            locator=make_table_cell_locator(
+                resolved.table_index, row_index, column_index
+            ),
             row_index=row_index,
             column_index=column_index,
             text=cell.text,
@@ -285,12 +300,16 @@ def read_node(document_path: Path, locator: str) -> tuple[str, str, dict[str, ob
     )
 
 
-def write_node(document_path: Path, locator: str, text: str, output_path: Path | None = None) -> Path:
+def write_node(
+    document_path: Path, locator: str, text: str, output_path: Path | None = None
+) -> Path:
     document = _open_document(document_path)
     resolved = _resolve_locator(document, locator)
 
     if isinstance(resolved, ResolvedParagraphTarget):
-        return replace_paragraph(document_path, f"para:{resolved.paragraph_index}", text, output_path)
+        return replace_paragraph(
+            document_path, f"para:{resolved.paragraph_index}", text, output_path
+        )
 
     cell = resolved.table.rows[resolved.row_index].cells[resolved.column_index]
     cell.text = text
@@ -299,7 +318,9 @@ def write_node(document_path: Path, locator: str, text: str, output_path: Path |
     return target_path
 
 
-def read_paragraph_fragments(document_path: Path, locator: str) -> TextContainerSnapshot:
+def read_paragraph_fragments(
+    document_path: Path, locator: str
+) -> TextContainerSnapshot:
     document = _open_document(document_path)
     canonical, components = _canonical_docx_locator(locator)
     if len(components) != 3 or components[:2] != ("docx", "para"):
@@ -381,7 +402,9 @@ def insert_paragraph(
         try:
             paragraph.style = style_name
         except (KeyError, ValueError) as exc:
-            raise InvalidArgumentsError(f"Unknown DOCX paragraph style: {style_name}") from exc
+            raise InvalidArgumentsError(
+                f"Unknown DOCX paragraph style: {style_name}"
+            ) from exc
 
     target_path = _target_path(document_path, output_path)
     document.save(target_path)
@@ -417,8 +440,11 @@ def add_heading(
         raise InvalidArgumentsError("DOCX heading level must be between 1 and 9.")
 
     document = _open_document(document_path)
-    paragraph = document.add_heading(text, level=level)
-    paragraph_index = sum(1 for block_type, _ in _iter_blocks(document) if block_type == "paragraph") - 1
+    document.add_heading(text, level=level)
+    paragraph_index = (
+        sum(1 for block_type, _ in _iter_blocks(document) if block_type == "paragraph")
+        - 1
+    )
     target_path = _target_path(document_path, output_path)
     document.save(target_path)
     return target_path, f"docx:para:{paragraph_index}"
@@ -434,7 +460,9 @@ def add_table(
         raise InvalidArgumentsError("DOCX table rows and columns must be positive.")
 
     document = _open_document(document_path)
-    table_index = sum(1 for block_type, _ in _iter_blocks(document) if block_type == "table")
+    table_index = sum(
+        1 for block_type, _ in _iter_blocks(document) if block_type == "table"
+    )
     document.add_table(rows=rows, cols=columns)
     target_path = _target_path(document_path, output_path)
     document.save(target_path)
@@ -450,7 +478,11 @@ def style_run(
 ) -> tuple[Path, str, dict[str, object]]:
     document = _open_document(document_path)
     canonical, components = _canonical_docx_locator(locator)
-    if len(components) != 5 or components[:2] != ("docx", "para") or components[3] != "run":
+    if (
+        len(components) != 5
+        or components[:2] != ("docx", "para")
+        or components[3] != "run"
+    ):
         raise InvalidArgumentsError("DOCX inline styling requires a run locator.")
 
     paragraph = _resolve_paragraph(document, f"para:{components[2]}")
@@ -479,18 +511,24 @@ def style_paragraph_range(
 ) -> tuple[Path, str, dict[str, object]]:
     snapshot = read_paragraph_fragments(document_path, locator)
     cleared_fields = _normalize_clear_fields(clear_fields, _INLINE_STYLE_FIELDS)
-    styled = apply_style_to_range(snapshot.fragments, text_range, style=style, clear_fields=cleared_fields)
+    styled = apply_style_to_range(
+        snapshot.fragments, text_range, style=style, clear_fields=cleared_fields
+    )
     target_path, canonical, rewritten = rewrite_paragraph_fragments(
         document_path,
         locator,
         styled,
         output_path=output_path,
     )
-    return target_path, canonical, {
-        "cleared_fields": cleared_fields,
-        "range": {"start": text_range.start, "end": text_range.end},
-        "text": rewritten.text,
-    }
+    return (
+        target_path,
+        canonical,
+        {
+            "cleared_fields": cleared_fields,
+            "range": {"start": text_range.start, "end": text_range.end},
+            "text": rewritten.text,
+        },
+    )
 
 
 def style_paragraph(
@@ -510,7 +548,11 @@ def style_paragraph(
     skipped_fields = _apply_docx_block_style(paragraph, style, cleared_fields)
     target_path = _target_path(document_path, output_path)
     document.save(target_path)
-    return target_path, canonical, {"cleared_fields": cleared_fields, "skipped_fields": skipped_fields}
+    return (
+        target_path,
+        canonical,
+        {"cleared_fields": cleared_fields, "skipped_fields": skipped_fields},
+    )
 
 
 def set_structural_role(
@@ -523,17 +565,25 @@ def set_structural_role(
     document = _open_document(document_path)
     canonical, components = _canonical_docx_locator(locator)
     if len(components) != 3 or components[:2] != ("docx", "para"):
-        raise InvalidArgumentsError("set_structural_role requires a DOCX paragraph locator.")
+        raise InvalidArgumentsError(
+            "set_structural_role requires a DOCX paragraph locator."
+        )
 
     style_name = _docx_structural_style_name(role, level)
     if not any(getattr(style, "name", None) == style_name for style in document.styles):
-        raise TargetNotEditableError(f"DOCX style {style_name!r} is not available in the document.")
+        raise TargetNotEditableError(
+            f"DOCX style {style_name!r} is not available in the document."
+        )
 
     paragraph = _resolve_paragraph(document, f"para:{components[2]}")
     paragraph.style = style_name
     target_path = _target_path(document_path, output_path)
     document.save(target_path)
-    return target_path, canonical, {"role": role, "level": level, "style_name": style_name}
+    return (
+        target_path,
+        canonical,
+        {"role": role, "level": level, "style_name": style_name},
+    )
 
 
 def get_blocks(document_path: Path) -> tuple[DocumentBlock, ...]:
@@ -568,7 +618,9 @@ def get_blocks(document_path: Path) -> tuple[DocumentBlock, ...]:
                     metadata={
                         "table_index": table_model.table_index,
                         "row_count": len(table_model.rows),
-                        "column_count": max((len(row) for row in table_model.rows), default=0),
+                        "column_count": max(
+                            (len(row) for row in table_model.rows), default=0
+                        ),
                     },
                 )
             )
@@ -619,7 +671,9 @@ def get_block_bundle(document_path: Path, block_index: int) -> BlockBundle:
             continue
 
         if block_type == "paragraph":
-            paragraph_model = _paragraph_model(block, current_block_index, paragraph_index)
+            paragraph_model = _paragraph_model(
+                block, current_block_index, paragraph_index
+            )
             return BlockBundle(
                 document=_document_ref(document_path),
                 block=DocumentBlock(
@@ -645,7 +699,9 @@ def get_block_bundle(document_path: Path, block_index: int) -> BlockBundle:
                 metadata={
                     "table_index": table_model.table_index,
                     "row_count": len(table_model.rows),
-                    "column_count": max((len(row) for row in table_model.rows), default=0),
+                    "column_count": max(
+                        (len(row) for row in table_model.rows), default=0
+                    ),
                 },
             ),
             table=table_model,
@@ -668,13 +724,17 @@ def append_paragraph_block(
         try:
             paragraph.style = style_name
         except (KeyError, ValueError) as exc:
-            raise InvalidArgumentsError(f"Unknown DOCX paragraph style: {style_name}") from exc
+            raise InvalidArgumentsError(
+                f"Unknown DOCX paragraph style: {style_name}"
+            ) from exc
     target_path = _target_path(document_path, output_path)
     document.save(target_path)
     return target_path, block_index
 
 
-def replace_block(document_path: Path, block_index: int, text: str, output_path: Path | None = None) -> Path:
+def replace_block(
+    document_path: Path, block_index: int, text: str, output_path: Path | None = None
+) -> Path:
     document = _open_document(document_path)
 
     paragraph_index = 0
@@ -685,7 +745,9 @@ def replace_block(document_path: Path, block_index: int, text: str, output_path:
             continue
 
         if block_type == "table":
-            raise TargetNotEditableError("DOCX table block replacement is not supported.")
+            raise TargetNotEditableError(
+                "DOCX table block replacement is not supported."
+            )
 
         item_id = f"para:{paragraph_index}"
         return replace_paragraph(document_path, item_id, text, output_path)
@@ -728,7 +790,9 @@ def _resolve_paragraph(document, item_id: str):
     try:
         paragraph_index = int(item_id.split(":", maxsplit=1)[1])
     except ValueError as exc:
-        raise InvalidArgumentsError(f"Invalid DOCX paragraph item id: {item_id}") from exc
+        raise InvalidArgumentsError(
+            f"Invalid DOCX paragraph item id: {item_id}"
+        ) from exc
 
     try:
         return document.paragraphs[paragraph_index]
@@ -753,7 +817,9 @@ def _resolve_locator(document, locator: str) -> ResolvedTarget:
                     paragraph=block,
                 )
             current_paragraph_index += 1
-        raise TargetNotFoundError(f"Paragraph {paragraph_index} does not exist in the document.")
+        raise TargetNotFoundError(
+            f"Paragraph {paragraph_index} does not exist in the document."
+        )
 
     table_index, row_index, column_index = parse_table_cell_locator(normalized)
     current_table_index = 0
@@ -783,7 +849,9 @@ def _parse_paragraph_locator(locator: str) -> int:
     try:
         return int(locator.split(":", maxsplit=1)[1])
     except ValueError as exc:
-        raise InvalidArgumentsError(f"Invalid DOCX paragraph item id: {locator}") from exc
+        raise InvalidArgumentsError(
+            f"Invalid DOCX paragraph item id: {locator}"
+        ) from exc
 
 
 def _capture_run_formatting(run: Run | None) -> RunFormatting | None:
@@ -875,7 +943,9 @@ def _iter_blocks(document) -> list[tuple[str, Paragraph | Table]]:
     return blocks
 
 
-def _paragraph_model(paragraph, block_index: int, paragraph_index: int) -> DocxParagraph:
+def _paragraph_model(
+    paragraph, block_index: int, paragraph_index: int
+) -> DocxParagraph:
     style_name = paragraph.style.name if paragraph.style is not None else None
     is_heading = bool(style_name and style_name.startswith("Heading"))
     text = paragraph.text
@@ -1004,14 +1074,18 @@ def _normalize_clear_fields(
     seen: set[str] = set()
     for field_name in clear_fields:
         if field_name not in allowed:
-            raise InvalidArgumentsError(f"Unknown style field in clear_fields: {field_name}")
+            raise InvalidArgumentsError(
+                f"Unknown style field in clear_fields: {field_name}"
+            )
         if field_name not in seen:
             normalized.append(field_name)
             seen.add(field_name)
     return tuple(normalized)
 
 
-def _apply_docx_inline_style(run: Run, style: InlineStyle, clear_fields: tuple[str, ...]) -> None:
+def _apply_docx_inline_style(
+    run: Run, style: InlineStyle, clear_fields: tuple[str, ...]
+) -> None:
     clear_set = set(clear_fields)
     if "bold" in clear_set:
         run.bold = None
@@ -1048,7 +1122,9 @@ def _apply_docx_inline_style(run: Run, style: InlineStyle, clear_fields: tuple[s
     if "font_color" in clear_set:
         run.font.color.rgb = None
     elif style.font_color is not None:
-        run.font.color.rgb = RGBColor.from_string(_normalize_hex_color(style.font_color))
+        run.font.color.rgb = RGBColor.from_string(
+            _normalize_hex_color(style.font_color)
+        )
 
     if "highlight" in clear_set:
         run.font.highlight_color = None
@@ -1130,7 +1206,9 @@ def _docx_structural_style_name(role: str, level: int | None) -> str:
     normalized = role.strip().lower()
     if normalized == "heading":
         if level is None or level < 1 or level > 9:
-            raise InvalidArgumentsError("Heading structural role requires level between 1 and 9.")
+            raise InvalidArgumentsError(
+                "Heading structural role requires level between 1 and 9."
+            )
         return f"Heading {level}"
     mapping = {
         "title": "Title",
@@ -1145,7 +1223,9 @@ def _docx_structural_style_name(role: str, level: int | None) -> str:
 
 def _normalize_hex_color(value: str) -> str:
     normalized = value.strip().lstrip("#").upper()
-    if len(normalized) != 6 or any(character not in "0123456789ABCDEF" for character in normalized):
+    if len(normalized) != 6 or any(
+        character not in "0123456789ABCDEF" for character in normalized
+    ):
         raise InvalidArgumentsError(f"Invalid RGB hex color: {value}")
     return normalized
 

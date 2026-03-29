@@ -1,16 +1,17 @@
 ## Purpose
 
 Define the xlsx-cell-editing capability for Office Agent.
-
 ## Requirements
-
-
 ### Requirement: XLSX cell value replacement
-The system SHALL support writing a new value to a resolved XLSX cell item through `office-agent write-cell`.
+The system SHALL support writing a new value to a resolved XLSX cell item through `office-agent write-cell`, and it SHALL additionally support rewriting a supported string cell from structured text segments when the caller uses the V2 object-mutation workflow.
 
 #### Scenario: Write-cell updates the targeted cell
 - **WHEN** a user runs `office-agent write-cell --doc <file> --sheet <name> --cell <coordinate> --value "<value>"`
 - **THEN** the system overwrites the targeted workbook cell with the provided value
+
+#### Scenario: Segment-based replacement promotes a string cell to rich text
+- **WHEN** a caller invokes `update_object` for a string-compatible XLSX cell with ordered text segments
+- **THEN** the system rewrites the target cell as normalized rich text representing those segments instead of flattening them into one unformatted string
 
 ### Requirement: XLSX append for string-compatible cells
 The system SHALL support appending text to a resolved XLSX cell item only when the existing cell is empty or contains a string-compatible value.
@@ -39,3 +40,4 @@ The system SHALL produce XLSX cell edits that can be reopened and verified after
 #### Scenario: Reopening confirms the workbook cell patch
 - **WHEN** an XLSX cell has been updated through `write-cell` or `append`
 - **THEN** reopening the workbook confirms that the targeted cell contains the expected updated value
+

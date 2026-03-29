@@ -85,7 +85,9 @@ def build_app():
     ) -> None:
         settings = load_config(config)
         services = AppServices(settings)
-        report = _run_command(lambda: services.run_doctor(), as_json=as_json, quiet=quiet)
+        report = _run_command(
+            lambda: services.run_doctor(), as_json=as_json, quiet=quiet
+        )
         emit_output(
             report,
             as_json=as_json,
@@ -236,7 +238,11 @@ def build_app():
         services = AppServices(load_config(config))
         _run_command(
             lambda: emit_output(
-                {"document_path": doc.resolve(), "item_id": item, "text": services.read_item(doc, item)},
+                {
+                    "document_path": doc.resolve(),
+                    "item_id": item,
+                    "text": services.read_item(doc, item),
+                },
                 as_json=as_json,
                 quiet=quiet,
                 human_renderer=render_text_result,
@@ -306,7 +312,9 @@ def build_app():
         services = AppServices(load_config(config))
         _run_command(
             lambda: emit_output(
-                services.write_cell_value(doc, sheet, cell, value, output_mode=output_mode),
+                services.write_cell_value(
+                    doc, sheet, cell, value, output_mode=output_mode
+                ),
                 as_json=as_json,
                 quiet=quiet,
                 human_renderer=render_patch_result,
@@ -380,6 +388,7 @@ def build_app():
 
     return app
 
+
 def _run_command(callback, *, as_json: bool = False, quiet: bool = False):
     if typer is None:
         raise RuntimeError("Typer is unavailable.")
@@ -423,5 +432,7 @@ def _rich_progress_reporter_class():
     try:
         from offagent.interfaces.cli_progress import RichProgressReporter
     except ModuleNotFoundError as exc:
-        raise RuntimeError("Rich is required to render indexing progress. Install project dependencies first.") from exc
+        raise RuntimeError(
+            "Rich is required to render indexing progress. Install project dependencies first."
+        ) from exc
     return RichProgressReporter

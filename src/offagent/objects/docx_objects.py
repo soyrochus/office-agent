@@ -88,7 +88,9 @@ class DocxObjectResolver:
             return list(children[:limit])
         return list(children)
 
-    def resolve_capabilities(self, document_path: Path, locator: str) -> frozenset[Capability]:
+    def resolve_capabilities(
+        self, document_path: Path, locator: str
+    ) -> frozenset[Capability]:
         del document_path
         canonical = to_v2_locator(locator, file_type="docx")
         target = _parse_docx_target(canonical)
@@ -106,7 +108,9 @@ def set_paragraph_style(
     document = docx_adapter._open_document(document_path)
     target = _parse_docx_target(canonical)
     if target.object_type != "paragraph":
-        raise InvalidArgumentsError("docx_set_paragraph_style requires a paragraph locator.")
+        raise InvalidArgumentsError(
+            "docx_set_paragraph_style requires a paragraph locator."
+        )
 
     _require_style_name(document, style_name)
     resolved = _resolve_paragraph_target(document, target)
@@ -132,7 +136,9 @@ def insert_page_break(
     document = docx_adapter._open_document(document_path)
     target = _parse_docx_target(canonical)
     if target.object_type != "paragraph":
-        raise InvalidArgumentsError("docx_insert_page_break requires a paragraph locator.")
+        raise InvalidArgumentsError(
+            "docx_insert_page_break requires a paragraph locator."
+        )
 
     resolved = _resolve_paragraph_target(document, target)
     new_element = document.element.body.add_p()
@@ -160,7 +166,9 @@ def add_table(
     output_path: Path,
 ) -> tuple[str, str, dict[str, Any]]:
     if row_count < 1 or column_count < 1:
-        raise InvalidArgumentsError("docx_add_table requires positive row and column counts.")
+        raise InvalidArgumentsError(
+            "docx_add_table requires positive row and column counts."
+        )
 
     document = docx_adapter._open_document(document_path)
     table = document.add_table(rows=row_count, cols=column_count)
@@ -171,7 +179,9 @@ def add_table(
 
     if column_widths is not None:
         if len(column_widths) != column_count:
-            raise InvalidArgumentsError("column_widths must match the DOCX table column count.")
+            raise InvalidArgumentsError(
+                "column_widths must match the DOCX table column count."
+            )
         for row in table.rows:
             for width, cell in zip(column_widths, row.cells, strict=True):
                 cell.width = int(width)
@@ -206,10 +216,17 @@ def merge_table_cells(
     canonical_end = to_v2_locator(end_locator, file_type="docx")
     start_target = _parse_docx_target(canonical_start)
     end_target = _parse_docx_target(canonical_end)
-    if start_target.object_type != "table_cell" or end_target.object_type != "table_cell":
-        raise InvalidArgumentsError("docx_merge_table_cells requires DOCX table-cell locators.")
+    if (
+        start_target.object_type != "table_cell"
+        or end_target.object_type != "table_cell"
+    ):
+        raise InvalidArgumentsError(
+            "docx_merge_table_cells requires DOCX table-cell locators."
+        )
     if start_target.table_index != end_target.table_index:
-        raise InvalidArgumentsError("docx_merge_table_cells requires both cells to be in the same table.")
+        raise InvalidArgumentsError(
+            "docx_merge_table_cells requires both cells to be in the same table."
+        )
 
     document = docx_adapter._open_document(document_path)
     start = _resolve_table_cell_target(document, start_target)
@@ -217,7 +234,9 @@ def merge_table_cells(
     min_row, max_row = sorted((start["row_index"], end["row_index"]))
     min_col, max_col = sorted((start["column_index"], end["column_index"]))
     if min_row > max_row or min_col > max_col:
-        raise InvalidArgumentsError("Table-cell locators must define a valid rectangular range.")
+        raise InvalidArgumentsError(
+            "Table-cell locators must define a valid rectangular range."
+        )
 
     start["table"].cell(min_row, min_col).merge(start["table"].cell(max_row, max_col))
     document.save(output_path)
@@ -258,12 +277,16 @@ def _build_document_payload(document_path: Path, document) -> ObjectPayload:
     )
 
 
-def _build_section_payload(document_path: Path, document, target: _DocxTarget) -> ObjectPayload:
+def _build_section_payload(
+    document_path: Path, document, target: _DocxTarget
+) -> ObjectPayload:
     assert target.section_index is not None
     try:
         section = document.sections[target.section_index]
     except IndexError as exc:
-        raise TargetNotFoundError(f"Section {target.section_index} does not exist in the document.") from exc
+        raise TargetNotFoundError(
+            f"Section {target.section_index} does not exist in the document."
+        ) from exc
 
     return ObjectPayload(
         document=docx_adapter._document_ref(document_path),
@@ -284,7 +307,9 @@ def _build_section_payload(document_path: Path, document, target: _DocxTarget) -
     )
 
 
-def _build_paragraph_payload(document_path: Path, document, target: _DocxTarget) -> ObjectPayload:
+def _build_paragraph_payload(
+    document_path: Path, document, target: _DocxTarget
+) -> ObjectPayload:
     resolved = _resolve_paragraph_target(document, target)
     paragraph_model = docx_adapter._paragraph_model(
         resolved["paragraph"],
@@ -323,7 +348,9 @@ def _build_paragraph_payload(document_path: Path, document, target: _DocxTarget)
     )
 
 
-def _build_run_payload(document_path: Path, document, target: _DocxTarget) -> ObjectPayload:
+def _build_run_payload(
+    document_path: Path, document, target: _DocxTarget
+) -> ObjectPayload:
     resolved = _resolve_run_target(document, target)
     run_model = docx_adapter._run_model(resolved["run"])
     paragraph_locator = f"docx:para:{resolved['paragraph_index']}"
@@ -349,7 +376,9 @@ def _build_run_payload(document_path: Path, document, target: _DocxTarget) -> Ob
     )
 
 
-def _build_table_payload(document_path: Path, document, target: _DocxTarget) -> ObjectPayload:
+def _build_table_payload(
+    document_path: Path, document, target: _DocxTarget
+) -> ObjectPayload:
     resolved = _resolve_table_target(document, target)
     table_model = docx_adapter._table_model(
         resolved["table"],
@@ -374,7 +403,9 @@ def _build_table_payload(document_path: Path, document, target: _DocxTarget) -> 
     )
 
 
-def _build_table_row_payload(document_path: Path, document, target: _DocxTarget) -> ObjectPayload:
+def _build_table_row_payload(
+    document_path: Path, document, target: _DocxTarget
+) -> ObjectPayload:
     resolved = _resolve_table_row_target(document, target)
     return ObjectPayload(
         document=docx_adapter._document_ref(document_path),
@@ -393,7 +424,9 @@ def _build_table_row_payload(document_path: Path, document, target: _DocxTarget)
     )
 
 
-def _build_table_cell_payload(document_path: Path, document, target: _DocxTarget) -> ObjectPayload:
+def _build_table_cell_payload(
+    document_path: Path, document, target: _DocxTarget
+) -> ObjectPayload:
     resolved = _resolve_table_cell_target(document, target)
     cell = resolved["cell"]
     return ObjectPayload(
@@ -413,12 +446,16 @@ def _build_table_cell_payload(document_path: Path, document, target: _DocxTarget
     )
 
 
-def _build_image_payload(document_path: Path, document, target: _DocxTarget) -> ObjectPayload:
+def _build_image_payload(
+    document_path: Path, document, target: _DocxTarget
+) -> ObjectPayload:
     assert target.image_index is not None
     try:
         shape = document.inline_shapes[target.image_index]
     except IndexError as exc:
-        raise TargetNotFoundError(f"Image {target.image_index} does not exist in the document.") from exc
+        raise TargetNotFoundError(
+            f"Image {target.image_index} does not exist in the document."
+        ) from exc
 
     return ObjectPayload(
         document=docx_adapter._document_ref(document_path),
@@ -436,7 +473,9 @@ def _build_image_payload(document_path: Path, document, target: _DocxTarget) -> 
     )
 
 
-def _build_page_break_payload(document_path: Path, document, target: _DocxTarget) -> ObjectPayload:
+def _build_page_break_payload(
+    document_path: Path, document, target: _DocxTarget
+) -> ObjectPayload:
     assert target.page_break_index is not None
     page_break = _resolve_page_break(document, target.page_break_index)
     return ObjectPayload(
@@ -454,7 +493,9 @@ def _build_page_break_payload(document_path: Path, document, target: _DocxTarget
     )
 
 
-def _document_children(document, *, child_type: str | None = None) -> tuple[ChildSummary, ...]:
+def _document_children(
+    document, *, child_type: str | None = None
+) -> tuple[ChildSummary, ...]:
     children: list[ChildSummary] = []
     normalized_child_type = _normalize_child_type(child_type)
     if normalized_child_type in {None, "section"}:
@@ -470,12 +511,16 @@ def _document_children(document, *, child_type: str | None = None) -> tuple[Chil
 
     paragraph_index = 0
     table_index = 0
-    for block_index, (block_type, block) in enumerate(docx_adapter._iter_blocks(document)):
+    for block_index, (block_type, block) in enumerate(
+        docx_adapter._iter_blocks(document)
+    ):
         if block_type == "paragraph":
             if normalized_child_type not in {None, "paragraph"}:
                 paragraph_index += 1
                 continue
-            paragraph_model = docx_adapter._paragraph_model(block, block_index, paragraph_index)
+            paragraph_model = docx_adapter._paragraph_model(
+                block, block_index, paragraph_index
+            )
             children.append(
                 ChildSummary(
                     locator=f"docx:para:{paragraph_index}",
@@ -526,13 +571,17 @@ def _document_children(document, *, child_type: str | None = None) -> tuple[Chil
     return tuple(children)
 
 
-def _section_children(document, target: _DocxTarget, *, child_type: str | None = None) -> tuple[ChildSummary, ...]:
+def _section_children(
+    document, target: _DocxTarget, *, child_type: str | None = None
+) -> tuple[ChildSummary, ...]:
     if len(document.sections) == 1 and target.section_index == 0:
         return _document_children(document, child_type=child_type)
     return ()
 
 
-def _paragraph_children(document, target: _DocxTarget, *, child_type: str | None = None) -> tuple[ChildSummary, ...]:
+def _paragraph_children(
+    document, target: _DocxTarget, *, child_type: str | None = None
+) -> tuple[ChildSummary, ...]:
     resolved = _resolve_paragraph_target(document, target)
     normalized_child_type = _normalize_child_type(child_type)
     children: list[ChildSummary] = []
@@ -549,7 +598,9 @@ def _paragraph_children(document, target: _DocxTarget, *, child_type: str | None
             )
 
     if normalized_child_type in {None, "page_break"}:
-        for page_break in _page_breaks_in_paragraph(resolved["paragraph"], resolved["paragraph_index"]):
+        for page_break in _page_breaks_in_paragraph(
+            resolved["paragraph"], resolved["paragraph_index"]
+        ):
             children.append(
                 ChildSummary(
                     locator=f"docx:page_break:{page_break['page_break_index']}",
@@ -562,7 +613,9 @@ def _paragraph_children(document, target: _DocxTarget, *, child_type: str | None
     return tuple(children)
 
 
-def _table_children(document, target: _DocxTarget, *, child_type: str | None = None) -> tuple[ChildSummary, ...]:
+def _table_children(
+    document, target: _DocxTarget, *, child_type: str | None = None
+) -> tuple[ChildSummary, ...]:
     resolved = _resolve_table_target(document, target)
     normalized_child_type = _normalize_child_type(child_type)
     if normalized_child_type not in {None, "table_row"}:
@@ -578,7 +631,9 @@ def _table_children(document, target: _DocxTarget, *, child_type: str | None = N
     )
 
 
-def _table_row_children(document, target: _DocxTarget, *, child_type: str | None = None) -> tuple[ChildSummary, ...]:
+def _table_row_children(
+    document, target: _DocxTarget, *, child_type: str | None = None
+) -> tuple[ChildSummary, ...]:
     resolved = _resolve_table_row_target(document, target)
     normalized_child_type = _normalize_child_type(child_type)
     if normalized_child_type not in {None, "table_cell"}:
@@ -597,7 +652,9 @@ def _table_row_children(document, target: _DocxTarget, *, child_type: str | None
 def _resolve_paragraph_target(document, target: _DocxTarget) -> dict[str, Any]:
     assert target.paragraph_index is not None
     current_paragraph_index = 0
-    for block_index, (block_type, block) in enumerate(docx_adapter._iter_blocks(document)):
+    for block_index, (block_type, block) in enumerate(
+        docx_adapter._iter_blocks(document)
+    ):
         if block_type != "paragraph":
             continue
         if current_paragraph_index == target.paragraph_index:
@@ -607,7 +664,9 @@ def _resolve_paragraph_target(document, target: _DocxTarget) -> dict[str, Any]:
                 "paragraph": block,
             }
         current_paragraph_index += 1
-    raise TargetNotFoundError(f"Paragraph {target.paragraph_index} does not exist in the document.")
+    raise TargetNotFoundError(
+        f"Paragraph {target.paragraph_index} does not exist in the document."
+    )
 
 
 def _resolve_run_target(document, target: _DocxTarget) -> dict[str, Any]:
@@ -625,7 +684,9 @@ def _resolve_run_target(document, target: _DocxTarget) -> dict[str, Any]:
 def _resolve_table_target(document, target: _DocxTarget) -> dict[str, Any]:
     assert target.table_index is not None
     current_table_index = 0
-    for block_index, (block_type, block) in enumerate(docx_adapter._iter_blocks(document)):
+    for block_index, (block_type, block) in enumerate(
+        docx_adapter._iter_blocks(document)
+    ):
         if block_type != "table":
             continue
         if current_table_index == target.table_index:
@@ -635,7 +696,9 @@ def _resolve_table_target(document, target: _DocxTarget) -> dict[str, Any]:
                 "table": block,
             }
         current_table_index += 1
-    raise TargetNotFoundError(f"Table {target.table_index} does not exist in the document.")
+    raise TargetNotFoundError(
+        f"Table {target.table_index} does not exist in the document."
+    )
 
 
 def _resolve_table_row_target(document, target: _DocxTarget) -> dict[str, Any]:
@@ -666,7 +729,9 @@ def _resolve_page_break(document, page_break_index: int) -> dict[str, int]:
     try:
         return _page_breaks(document)[page_break_index]
     except IndexError as exc:
-        raise TargetNotFoundError(f"Page break {page_break_index} does not exist in the document.") from exc
+        raise TargetNotFoundError(
+            f"Page break {page_break_index} does not exist in the document."
+        ) from exc
 
 
 def _page_breaks(document) -> list[dict[str, int]]:
@@ -675,12 +740,18 @@ def _page_breaks(document) -> list[dict[str, int]]:
     for block_type, block in docx_adapter._iter_blocks(document):
         if block_type != "paragraph":
             continue
-        page_breaks.extend(_page_breaks_in_paragraph(block, paragraph_index, base_index=len(page_breaks)))
+        page_breaks.extend(
+            _page_breaks_in_paragraph(
+                block, paragraph_index, base_index=len(page_breaks)
+            )
+        )
         paragraph_index += 1
     return page_breaks
 
 
-def _page_breaks_in_paragraph(paragraph, paragraph_index: int, *, base_index: int = 0) -> list[dict[str, int]]:
+def _page_breaks_in_paragraph(
+    paragraph, paragraph_index: int, *, base_index: int = 0
+) -> list[dict[str, int]]:
     if qn is None:
         return []
 
@@ -703,7 +774,9 @@ def _page_break_for_paragraph(document, paragraph_index: int) -> dict[str, int]:
     for page_break in _page_breaks(document):
         if page_break["paragraph_index"] == paragraph_index:
             return page_break
-    raise RuntimeError(f"Failed to resolve inserted page break for paragraph {paragraph_index}.")
+    raise RuntimeError(
+        f"Failed to resolve inserted page break for paragraph {paragraph_index}."
+    )
 
 
 def _parse_docx_target(locator: str) -> _DocxTarget:
@@ -712,10 +785,18 @@ def _parse_docx_target(locator: str) -> _DocxTarget:
     if components == ("docx", "document"):
         return _DocxTarget(locator, "document")
     if len(components) == 3 and components[:2] == ("docx", "section"):
-        return _DocxTarget(locator, "section", section_index=_require_index(components[2], locator))
+        return _DocxTarget(
+            locator, "section", section_index=_require_index(components[2], locator)
+        )
     if len(components) == 3 and components[:2] == ("docx", "para"):
-        return _DocxTarget(locator, "paragraph", paragraph_index=_require_index(components[2], locator))
-    if len(components) == 5 and components[:2] == ("docx", "para") and components[3] == "run":
+        return _DocxTarget(
+            locator, "paragraph", paragraph_index=_require_index(components[2], locator)
+        )
+    if (
+        len(components) == 5
+        and components[:2] == ("docx", "para")
+        and components[3] == "run"
+    ):
         return _DocxTarget(
             locator,
             "run",
@@ -723,8 +804,14 @@ def _parse_docx_target(locator: str) -> _DocxTarget:
             run_index=_require_index(components[4], locator),
         )
     if len(components) == 3 and components[:2] == ("docx", "table"):
-        return _DocxTarget(locator, "table", table_index=_require_index(components[2], locator))
-    if len(components) == 5 and components[:2] == ("docx", "table") and components[3] == "row":
+        return _DocxTarget(
+            locator, "table", table_index=_require_index(components[2], locator)
+        )
+    if (
+        len(components) == 5
+        and components[:2] == ("docx", "table")
+        and components[3] == "row"
+    ):
         return _DocxTarget(
             locator,
             "table_row",
@@ -745,9 +832,15 @@ def _parse_docx_target(locator: str) -> _DocxTarget:
             column_index=_require_index(components[6], locator),
         )
     if len(components) == 3 and components[:2] == ("docx", "image"):
-        return _DocxTarget(locator, "image", image_index=_require_index(components[2], locator))
+        return _DocxTarget(
+            locator, "image", image_index=_require_index(components[2], locator)
+        )
     if len(components) == 3 and components[:2] == ("docx", "page_break"):
-        return _DocxTarget(locator, "page_break", page_break_index=_require_index(components[2], locator))
+        return _DocxTarget(
+            locator,
+            "page_break",
+            page_break_index=_require_index(components[2], locator),
+        )
     raise InvalidArgumentsError(f"Unsupported DOCX locator: {locator}")
 
 
@@ -768,9 +861,13 @@ def _capabilities_for(object_type: str) -> frozenset[Capability]:
             }
         )
     if object_type == "run":
-        return frozenset({Capability.READ, Capability.UPDATE, Capability.DELETE, Capability.STYLE})
+        return frozenset(
+            {Capability.READ, Capability.UPDATE, Capability.DELETE, Capability.STYLE}
+        )
     if object_type == "table":
-        return frozenset({Capability.READ, Capability.DELETE, Capability.MOVE, Capability.COPY})
+        return frozenset(
+            {Capability.READ, Capability.DELETE, Capability.MOVE, Capability.COPY}
+        )
     if object_type == "table_row":
         return frozenset(
             {
@@ -785,12 +882,16 @@ def _capabilities_for(object_type: str) -> frozenset[Capability]:
     if object_type == "table_cell":
         return frozenset({Capability.READ, Capability.UPDATE, Capability.STYLE})
     if object_type in {"image", "page_break"}:
-        return frozenset({Capability.READ, Capability.DELETE, Capability.MOVE, Capability.COPY})
+        return frozenset(
+            {Capability.READ, Capability.DELETE, Capability.MOVE, Capability.COPY}
+        )
     return frozenset({Capability.READ})
 
 
 def _capability_tuple(object_type: str) -> tuple[Capability, ...]:
-    return tuple(sorted(_capabilities_for(object_type), key=lambda capability: capability.value))
+    return tuple(
+        sorted(_capabilities_for(object_type), key=lambda capability: capability.value)
+    )
 
 
 def _normalize_child_type(child_type: str | None) -> str | None:
@@ -827,7 +928,9 @@ def _resolve_insert_anchor(document, position: object | None):
         return _resolve_paragraph_target(document, target)["paragraph"]._element
     if target.object_type == "table":
         return _resolve_table_target(document, target)["table"]._element
-    raise InvalidArgumentsError("DOCX insert position must reference a paragraph or table.")
+    raise InvalidArgumentsError(
+        "DOCX insert position must reference a paragraph or table."
+    )
 
 
 def _table_index_for_element(document, table_element) -> int:

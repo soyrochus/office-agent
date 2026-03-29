@@ -15,7 +15,9 @@ def normalize_fragments(
             continue
         if merged and merged[-1].style == fragment.style:
             previous = merged[-1]
-            merged[-1] = InlineFragment(text=f"{previous.text}{fragment.text}", style=previous.style)
+            merged[-1] = InlineFragment(
+                text=f"{previous.text}{fragment.text}", style=previous.style
+            )
             continue
         merged.append(fragment)
     return tuple(merged)
@@ -36,23 +38,36 @@ def split_fragments_at_offsets(
         fragment_start = current_offset
         fragment_end = current_offset + len(fragment.text)
         start = 0
-        while offset_index < len(normalized_offsets) and normalized_offsets[offset_index] < fragment_end:
+        while (
+            offset_index < len(normalized_offsets)
+            and normalized_offsets[offset_index] < fragment_end
+        ):
             split_at = normalized_offsets[offset_index]
             if split_at > fragment_start:
                 relative = split_at - fragment_start
                 if relative > start:
-                    split.append(InlineFragment(text=fragment.text[start:relative], style=fragment.style))
+                    split.append(
+                        InlineFragment(
+                            text=fragment.text[start:relative], style=fragment.style
+                        )
+                    )
                 start = relative
             offset_index += 1
         if start < len(fragment.text):
-            split.append(InlineFragment(text=fragment.text[start:], style=fragment.style))
+            split.append(
+                InlineFragment(text=fragment.text[start:], style=fragment.style)
+            )
         current_offset = fragment_end
     return tuple(split)
 
 
-def validate_visible_text_range(text_range: VisibleTextRange, *, text_length: int) -> None:
+def validate_visible_text_range(
+    text_range: VisibleTextRange, *, text_length: int
+) -> None:
     if text_range.start < 0 or text_range.end < 0:
-        raise InvalidArgumentsError("Visible-text ranges must use non-negative offsets.")
+        raise InvalidArgumentsError(
+            "Visible-text ranges must use non-negative offsets."
+        )
     if text_range.end <= text_range.start:
         raise InvalidArgumentsError("Visible-text ranges must have end > start.")
     if text_range.end > text_length:
@@ -78,7 +93,12 @@ def apply_style_to_range(
     for fragment in split:
         next_cursor = cursor + len(fragment.text)
         if cursor >= text_range.start and next_cursor <= text_range.end:
-            updated.append(InlineFragment(text=fragment.text, style=merge_inline_style(fragment.style, style, clear_fields)))
+            updated.append(
+                InlineFragment(
+                    text=fragment.text,
+                    style=merge_inline_style(fragment.style, style, clear_fields),
+                )
+            )
         else:
             updated.append(fragment)
         cursor = next_cursor

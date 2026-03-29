@@ -12,7 +12,9 @@ def build_versioned_output_path(
     create_directory: bool = True,
 ) -> Path:
     source = source_path.resolve()
-    target_directory = source.parent if output_directory is None else output_directory.expanduser()
+    target_directory = (
+        source.parent if output_directory is None else output_directory.expanduser()
+    )
     if create_directory:
         target_directory.mkdir(parents=True, exist_ok=True)
     rendered_timestamp = _render_timestamp(timestamp)
@@ -21,5 +23,9 @@ def build_versioned_output_path(
 
 
 def _render_timestamp(timestamp: datetime | None) -> str:
-    current = datetime.now(timezone.utc) if timestamp is None else timestamp.astimezone(timezone.utc)
+    current = (
+        datetime.now(timezone.utc)
+        if timestamp is None
+        else timestamp.astimezone(timezone.utc)
+    )
     return current.strftime("%Y%m%d-%H%M%S%f")

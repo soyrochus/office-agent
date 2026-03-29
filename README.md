@@ -386,6 +386,8 @@ The MCP server exposes these tools:
 - `index_documents(paths)`
 - `refresh_document(document_id)`
 - `list_documents()`
+- `create_document(format, output_path, initial_sheet_name=None, output_mode="versioned")`
+- `add_content_block(document_id, block_type, properties, output_mode="versioned")`
 - `search_objects(query, file_type=None, document_id=None, mode="keyword", limit=20)`
 - `search_documents(...)` as a deprecated alias for pre-V2 consumers
 - `get_structure(document_id)`
@@ -393,11 +395,14 @@ The MCP server exposes these tools:
 - `get_node(document_id, node_id)`
 - `write_node(document_id, node_id, content, output_mode="versioned")`
 - `insert_content(document_id, content, style_name=None, after_node_id=None, output_mode="versioned")`
+- `style_inline(document_id, locator, style, range=None, clear_fields=None, output_mode="versioned")`
+- `style_block(document_id, locator, style, clear_fields=None, output_mode="versioned")`
+- `set_structural_role(document_id, locator, role, level=None, output_mode="versioned")`
 - `docx_get_tables(document_id)`
 - `get_object(document_id, locator)`
 - `list_children(document_id, locator, child_type=None, limit=None)`
-- `create_object(document_id, parent_locator, object_type, properties, position=None, output_mode="versioned")`
-- `update_object(document_id, locator, properties, output_mode="versioned")`
+- `create_object(document_id, parent_locator, object_type, properties, segments=None, range=None, position=None, output_mode="versioned")`
+- `update_object(document_id, locator, properties, segments=None, range=None, output_mode="versioned")`
 - `move_object(document_id, locator, new_parent_locator, position=None, output_mode="versioned")`
 - `copy_object(document_id, locator, target_parent_locator, position=None, output_mode="versioned")`
 - `batch_edit(document_id, operations, output_mode="versioned", dry_run=False)`
@@ -415,6 +420,12 @@ The MCP server exposes these tools:
 - `xlsx_insert_columns(document_id, locator, column_index, count, output_mode="versioned")`
 - `xlsx_set_formula(document_id, locator, formula, output_mode="versioned")`
 - `xlsx_merge_cells(document_id, locator, output_mode="versioned")`
+
+Notes:
+
+- `search_objects` is the canonical MCP search entrypoint; `search_documents` remains for compatibility.
+- `create_object` and `update_object` support additive `segments` inputs for partial-formatting workflows.
+- `style_inline` supports visible-text `range` inputs for partial inline styling across supported DOCX, PPTX, and XLSX targets.
 
 ## Example query session
 

@@ -37,7 +37,11 @@ try:
     from openpyxl.cell.rich_text import CellRichText, TextBlock
     from openpyxl.cell.text import InlineFont
     from openpyxl.styles import Alignment, Font, PatternFill
-    from openpyxl.utils.cell import coordinate_to_tuple, get_column_letter, range_boundaries
+    from openpyxl.utils.cell import (
+        coordinate_to_tuple,
+        get_column_letter,
+        range_boundaries,
+    )
 except ModuleNotFoundError:  # pragma: no cover - exercised through dependency checks
     Workbook = None
     CellRichText = None
@@ -100,8 +104,12 @@ def extract_document(document_path: Path) -> list[IndexedItem]:
                 formula = _formula_text(cell)
                 display_text = _display_text(cell)
                 indexed_cells.append((cell, formula, display_text))
-                row_contexts.setdefault(cell.row, []).append((cell.coordinate, display_text))
-                column_contexts.setdefault(cell.column, []).append((cell.coordinate, display_text))
+                row_contexts.setdefault(cell.row, []).append(
+                    (cell.coordinate, display_text)
+                )
+                column_contexts.setdefault(cell.column, []).append(
+                    (cell.coordinate, display_text)
+                )
 
         for cell, formula, display_text in indexed_cells:
             item_id = make_item_id(worksheet.title, cell.coordinate)
@@ -119,7 +127,9 @@ def extract_document(document_path: Path) -> list[IndexedItem]:
                         "formula": formula,
                         "display_text": display_text,
                         "data_type": cell.data_type,
-                        "row_context": _context_text(row_contexts[cell.row], exclude=cell.coordinate),
+                        "row_context": _context_text(
+                            row_contexts[cell.row], exclude=cell.coordinate
+                        ),
                         "column_context": _context_text(
                             column_contexts[cell.column],
                             exclude=cell.coordinate,
@@ -145,7 +155,9 @@ def build_embedding_text(item: IndexedItem, document_path: Path) -> str:
     )
 
 
-def build_row_embeddings(items: list[IndexedItem], document_path: Path) -> list[XlsxRowEmbedding]:
+def build_row_embeddings(
+    items: list[IndexedItem], document_path: Path
+) -> list[XlsxRowEmbedding]:
     grouped: dict[tuple[str, int], list[IndexedItem]] = {}
 
     for item in items:
@@ -162,7 +174,9 @@ def build_row_embeddings(items: list[IndexedItem], document_path: Path) -> list[
     for (sheet_name, row_number), row_items in sorted(grouped.items()):
         ordered_items = sorted(
             row_items,
-            key=lambda item: _coordinate_sort_key(str(item.metadata.get("coordinate", ""))),
+            key=lambda item: _coordinate_sort_key(
+                str(item.metadata.get("coordinate", ""))
+            ),
         )
         contributing_cells = tuple(
             XlsxRowEmbeddingCell(
@@ -175,7 +189,9 @@ def build_row_embeddings(items: list[IndexedItem], document_path: Path) -> list[
         )
         representative = max(
             ordered_items,
-            key=lambda item: _representative_score(str(item.metadata.get("coordinate", "")), item),
+            key=lambda item: _representative_score(
+                str(item.metadata.get("coordinate", "")), item
+            ),
         )
         row_embeddings.append(
             XlsxRowEmbedding(
@@ -226,7 +242,9 @@ def add_sheet(
     return target_path, f"xlsx:sheet:{name}"
 
 
-def write_cell(document_path: Path, item_id: str, value: object, output_path: Path | None = None) -> Path:
+def write_cell(
+    document_path: Path, item_id: str, value: object, output_path: Path | None = None
+) -> Path:
     workbook = _open_workbook(document_path)
     cell = _resolve_cell(workbook, item_id)
     cell.value = _coerce_write_value(value)
@@ -246,17 +264,23 @@ def add_row(
     worksheet = _resolve_worksheet(workbook, sheet_name)
     target_row = _last_used_row(worksheet) + 1
     for column_index, value in enumerate(values, start=1):
-        worksheet.cell(row=target_row, column=column_index).value = _coerce_write_value(value)
+        worksheet.cell(row=target_row, column=column_index).value = _coerce_write_value(
+            value
+        )
     target_path = _target_path(document_path, output_path)
     workbook.save(target_path)
     return target_path, f"xlsx:sheet:{sheet_name}:row:{target_row}"
 
 
-def append_cell(document_path: Path, item_id: str, text: str, output_path: Path | None = None) -> Path:
+def append_cell(
+    document_path: Path, item_id: str, text: str, output_path: Path | None = None
+) -> Path:
     workbook = _open_workbook(document_path)
     cell = _resolve_cell(workbook, item_id)
     formula = _formula_text(cell)
-    if formula is not None or (cell.value is not None and not isinstance(cell.value, str)):
+    if formula is not None or (
+        cell.value is not None and not isinstance(cell.value, str)
+    ):
         raise TargetNotAppendableError("target not appendable; use write-cell")
     if cell.value is None:
         cell.value = text
@@ -285,7 +309,9 @@ def resolve_structure(document_path: Path) -> tuple[StructureSection, ...]:
 
     for worksheet in workbook.worksheets:
         anchor = _first_indexable_cell(worksheet)
-        locator = make_item_id(worksheet.title, anchor.coordinate if anchor is not None else "A1")
+        locator = make_item_id(
+            worksheet.title, anchor.coordinate if anchor is not None else "A1"
+        )
         preview = "" if anchor is None else _display_text(anchor)[:120]
         sections.append(
             StructureSection(
@@ -305,14 +331,18 @@ def resolve_structure(document_path: Path) -> tuple[StructureSection, ...]:
     return tuple(sections)
 
 
-def get_section(document_path: Path, locator: str, *, cell_range: str | None = None) -> SectionPayload:
+def get_section(
+    document_path: Path, locator: str, *, cell_range: str | None = None
+) -> SectionPayload:
     sheet_name, _ = parse_item_id(locator)
     snapshot = get_sheet_snapshot(document_path, sheet_name, cell_range=cell_range)
     return SectionPayload(
         document=snapshot.document,
         locator=locator,
         section_type="worksheet",
-        preview=next((cell.display_value for cell in snapshot.cells if cell.display_value), ""),
+        preview=next(
+            (cell.display_value for cell in snapshot.cells if cell.display_value), ""
+        ),
         metadata={**snapshot.metadata, "sheet_name": sheet_name},
         sheet_name=sheet_name,
         cells=tuple(
@@ -344,7 +374,9 @@ def read_node(document_path: Path, locator: str) -> tuple[str, str, dict[str, ob
     )
 
 
-def write_node(document_path: Path, locator: str, value: str, output_path: Path | None = None) -> Path:
+def write_node(
+    document_path: Path, locator: str, value: str, output_path: Path | None = None
+) -> Path:
     return write_cell(document_path, locator, value, output_path)
 
 
@@ -383,7 +415,9 @@ def get_workbook_structure(document_path: Path) -> WorkbookStructure:
             )
         )
 
-    return WorkbookStructure(document=_document_ref(document_path), sheets=tuple(sheets))
+    return WorkbookStructure(
+        document=_document_ref(document_path), sheets=tuple(sheets)
+    )
 
 
 def get_sheet_snapshot(
@@ -450,7 +484,9 @@ def append_row(
     output_path: Path | None = None,
 ) -> tuple[Path, int, tuple[str, ...]]:
     if (values is None) == (record is None):
-        raise InvalidArgumentsError("append_row requires exactly one of values or record.")
+        raise InvalidArgumentsError(
+            "append_row requires exactly one of values or record."
+        )
 
     workbook = _open_workbook(document_path)
     worksheet = _resolve_worksheet(workbook, sheet_name)
@@ -470,7 +506,9 @@ def append_row(
             )
         for key, value in record.items():
             if key not in header_map:
-                raise InvalidArgumentsError(f"Unknown worksheet header for append_row: {key}")
+                raise InvalidArgumentsError(
+                    f"Unknown worksheet header for append_row: {key}"
+                )
             coordinate = f"{get_column_letter(header_map[key])}{target_row}"
             worksheet[coordinate] = _coerce_write_value(value)
             written_coordinates.append(coordinate)
@@ -490,7 +528,9 @@ def write_table(
     output_path: Path | None = None,
 ) -> tuple[Path, int, int]:
     if (rows is None) == (records is None):
-        raise InvalidArgumentsError("write_table requires exactly one of rows or records.")
+        raise InvalidArgumentsError(
+            "write_table requires exactly one of rows or records."
+        )
 
     workbook = _open_workbook(document_path)
     worksheet = _resolve_worksheet(workbook, sheet_name)
@@ -509,7 +549,9 @@ def write_table(
         for row_offset, record in enumerate(records):
             for key, value in record.items():
                 if key not in resolved_mapping:
-                    raise InvalidArgumentsError(f"Unknown worksheet mapping for write_table field: {key}")
+                    raise InvalidArgumentsError(
+                        f"Unknown worksheet mapping for write_table field: {key}"
+                    )
                 worksheet.cell(
                     row=start_row + row_offset,
                     column=resolved_mapping[key],
@@ -554,7 +596,11 @@ def style_cell_inline(
     skipped_fields = _apply_xlsx_inline_style(cell, style, clear_set)
     target_path = _target_path(document_path, output_path)
     workbook.save(target_path)
-    return target_path, canonical, {"cleared_fields": clear_set, "skipped_fields": skipped_fields}
+    return (
+        target_path,
+        canonical,
+        {"cleared_fields": clear_set, "skipped_fields": skipped_fields},
+    )
 
 
 def read_cell_fragments(document_path: Path, locator: str) -> TextContainerSnapshot:
@@ -606,18 +652,24 @@ def style_cell_range(
 ) -> tuple[Path, str, dict[str, object]]:
     snapshot = read_cell_fragments(document_path, locator)
     clear_set = _normalize_clear_fields(clear_fields, _INLINE_STYLE_FIELDS)
-    styled = apply_style_to_range(snapshot.fragments, text_range, style=style, clear_fields=clear_set)
+    styled = apply_style_to_range(
+        snapshot.fragments, text_range, style=style, clear_fields=clear_set
+    )
     target_path, canonical, rewritten = write_cell_fragments(
         document_path,
         locator,
         styled,
         output_path=output_path,
     )
-    return target_path, canonical, {
-        "cleared_fields": clear_set,
-        "range": {"start": text_range.start, "end": text_range.end},
-        "text": rewritten.text,
-    }
+    return (
+        target_path,
+        canonical,
+        {
+            "cleared_fields": clear_set,
+            "range": {"start": text_range.start, "end": text_range.end},
+            "text": rewritten.text,
+        },
+    )
 
 
 def style_cell_block(
@@ -634,7 +686,11 @@ def style_cell_block(
     skipped_fields = _apply_xlsx_block_style(cell, style, clear_set)
     target_path = _target_path(document_path, output_path)
     workbook.save(target_path)
-    return target_path, canonical, {"cleared_fields": clear_set, "skipped_fields": skipped_fields}
+    return (
+        target_path,
+        canonical,
+        {"cleared_fields": clear_set, "skipped_fields": skipped_fields},
+    )
 
 
 def _open_workbook(document_path: Path):
@@ -717,7 +773,9 @@ def _normalize_coordinate(coordinate: str) -> str:
     try:
         coordinate_to_tuple(normalized)
     except ValueError as exc:
-        raise InvalidArgumentsError(f"Invalid XLSX cell coordinate: {coordinate}") from exc
+        raise InvalidArgumentsError(
+            f"Invalid XLSX cell coordinate: {coordinate}"
+        ) from exc
     return normalized
 
 
@@ -750,20 +808,30 @@ def _legacy_item_id_from_v2(locator: str) -> str:
 
 def _ensure_partial_formatting_cell_supported(cell, locator: str) -> None:
     if _formula_text(cell) is not None:
-        raise TargetNotEditableError(f"{locator} does not support partial formatting for formula cells.")
+        raise TargetNotEditableError(
+            f"{locator} does not support partial formatting for formula cells."
+        )
     if isinstance(cell.value, bool):
-        raise TargetNotEditableError(f"{locator} does not support partial formatting for boolean cells.")
-    if cell.coordinate in {merged.split(':')[0] for merged in map(str, cell.parent.merged_cells.ranges)}:
+        raise TargetNotEditableError(
+            f"{locator} does not support partial formatting for boolean cells."
+        )
+    if cell.coordinate in {
+        merged.split(":")[0] for merged in map(str, cell.parent.merged_cells.ranges)
+    }:
         return
     for merged in cell.parent.merged_cells.ranges:
         if cell.coordinate in merged:
-            raise TargetNotEditableError(f"{locator} does not support partial formatting for merged cells.")
+            raise TargetNotEditableError(
+                f"{locator} does not support partial formatting for merged cells."
+            )
     if cell.value is None:
         return
     if CellRichText is not None and isinstance(cell.value, CellRichText):
         return
     if not isinstance(cell.value, str):
-        raise TargetNotEditableError(f"{locator} does not support partial formatting for non-string cells.")
+        raise TargetNotEditableError(
+            f"{locator} does not support partial formatting for non-string cells."
+        )
 
 
 def _read_xlsx_fragments(cell) -> tuple[InlineFragment, ...]:
@@ -795,7 +863,9 @@ def _write_xlsx_fragments(
         cell.value = ""
         return
     if CellRichText is None or TextBlock is None or InlineFont is None:
-        raise RuntimeError("openpyxl rich-text support is required for XLSX partial formatting.")
+        raise RuntimeError(
+            "openpyxl rich-text support is required for XLSX partial formatting."
+        )
     rich_parts: list[object] = []
     for fragment in normalized:
         if all(value is None for value in fragment.style.__dict__.values()):
@@ -820,7 +890,9 @@ def _inline_style_from_xlsx_font(font) -> InlineStyle:
     return InlineStyle(
         bold=getattr(font, "b", getattr(font, "bold", None)),
         italic=getattr(font, "i", getattr(font, "italic", None)),
-        underline=underline if underline is not None else getattr(font, "underline", None),
+        underline=underline
+        if underline is not None
+        else getattr(font, "underline", None),
         strike=getattr(font, "strike", None),
         font_name=getattr(font, "rFont", getattr(font, "name", None)),
         font_size=getattr(font, "sz", None),
@@ -835,7 +907,9 @@ def _xlsx_inline_font(style: InlineStyle):
         strike=style.strike,
         rFont=style.font_name,
         sz=style.font_size,
-        color=None if style.font_color is None else _normalize_hex_color(style.font_color),
+        color=None
+        if style.font_color is None
+        else _normalize_hex_color(style.font_color),
         u="single" if style.underline else None,
     )
 
@@ -888,14 +962,18 @@ def _normalize_clear_fields(
     seen: set[str] = set()
     for field_name in clear_fields:
         if field_name not in allowed:
-            raise InvalidArgumentsError(f"Unknown style field in clear_fields: {field_name}")
+            raise InvalidArgumentsError(
+                f"Unknown style field in clear_fields: {field_name}"
+            )
         if field_name not in seen:
             normalized.append(field_name)
             seen.add(field_name)
     return tuple(normalized)
 
 
-def _apply_xlsx_inline_style(cell, style: InlineStyle, clear_fields: tuple[str, ...]) -> list[str]:
+def _apply_xlsx_inline_style(
+    cell, style: InlineStyle, clear_fields: tuple[str, ...]
+) -> list[str]:
     font = copy(cell.font)
     clear_set = set(clear_fields)
     skipped_fields: list[str] = []
@@ -942,7 +1020,9 @@ def _apply_xlsx_inline_style(cell, style: InlineStyle, clear_fields: tuple[str, 
     return skipped_fields
 
 
-def _apply_xlsx_block_style(cell, style: BlockStyle, clear_fields: tuple[str, ...]) -> list[str]:
+def _apply_xlsx_block_style(
+    cell, style: BlockStyle, clear_fields: tuple[str, ...]
+) -> list[str]:
     alignment = copy(cell.alignment)
     clear_set = set(clear_fields)
     skipped_fields: list[str] = []
@@ -967,7 +1047,13 @@ def _apply_xlsx_block_style(cell, style: BlockStyle, clear_fields: tuple[str, ..
     elif style.indent_level is not None:
         alignment.indent = style.indent_level
 
-    for field_name in ("left_indent", "right_indent", "spacing_before", "spacing_after", "line_spacing"):
+    for field_name in (
+        "left_indent",
+        "right_indent",
+        "spacing_before",
+        "spacing_after",
+        "line_spacing",
+    ):
         if getattr(style, field_name) is not None or field_name in clear_set:
             skipped_fields.append(field_name)
 
@@ -988,7 +1074,9 @@ def _apply_xlsx_block_style(cell, style: BlockStyle, clear_fields: tuple[str, ..
 
 def _normalize_hex_color(value: str) -> str:
     normalized = value.strip().lstrip("#").upper()
-    if len(normalized) != 6 or any(character not in "0123456789ABCDEF" for character in normalized):
+    if len(normalized) != 6 or any(
+        character not in "0123456789ABCDEF" for character in normalized
+    ):
         raise InvalidArgumentsError(f"Invalid RGB hex color: {value}")
     return normalized
 
@@ -1057,14 +1145,18 @@ def _build_row_embedding_text(
         "Cells:",
     ]
     lines.extend(
-        f"- {cell.coordinate}: {cell.display_text}"
-        for cell in contributing_cells
+        f"- {cell.coordinate}: {cell.display_text}" for cell in contributing_cells
     )
     return "\n".join(lines)
 
 
 def _used_bounds(worksheet) -> tuple[int, int, int, int] | None:
-    used_cells = [cell for row in worksheet.iter_rows() for cell in row if _is_indexable_cell(cell)]
+    used_cells = [
+        cell
+        for row in worksheet.iter_rows()
+        for cell in row
+        if _is_indexable_cell(cell)
+    ]
     if not used_cells:
         return None
     min_row = min(cell.row for cell in used_cells)
@@ -1084,7 +1176,9 @@ def _snapshot_bounds(
 ) -> tuple[int, int, int, int] | None:
     if cell_range is not None:
         if start_cell is not None or row_count is not None or column_count is not None:
-            raise InvalidArgumentsError("sheet snapshot range and window inputs are mutually exclusive.")
+            raise InvalidArgumentsError(
+                "sheet snapshot range and window inputs are mutually exclusive."
+            )
         if range_boundaries is None:
             raise RuntimeError("openpyxl is required for XLSX operations.")
         min_col, min_row, max_col, max_row = range_boundaries(cell_range)
@@ -1110,7 +1204,9 @@ def _format_range(bounds: tuple[int, int, int, int] | None) -> str | None:
     if bounds is None or get_column_letter is None:
         return None
     min_row, min_col, max_row, max_col = bounds
-    return f"{get_column_letter(min_col)}{min_row}:{get_column_letter(max_col)}{max_row}"
+    return (
+        f"{get_column_letter(min_col)}{min_row}:{get_column_letter(max_col)}{max_row}"
+    )
 
 
 def _last_used_row(worksheet) -> int:
@@ -1127,7 +1223,9 @@ def _header_map(worksheet) -> dict[str, int]:
     return header_map
 
 
-def _resolve_record_mapping(worksheet, column_mapping: dict[str, str] | None) -> dict[str, int]:
+def _resolve_record_mapping(
+    worksheet, column_mapping: dict[str, str] | None
+) -> dict[str, int]:
     if column_mapping is None:
         return _header_map(worksheet)
 
@@ -1144,7 +1242,9 @@ def _resolve_record_mapping(worksheet, column_mapping: dict[str, str] | None) ->
             _, column_number = coordinate_to_tuple(f"{normalized_target.upper()}1")
             resolved[field_name] = column_number
             continue
-        raise InvalidArgumentsError(f"Unknown worksheet header in column_mapping: {target}")
+        raise InvalidArgumentsError(
+            f"Unknown worksheet header in column_mapping: {target}"
+        )
     return resolved
 
 
@@ -1161,4 +1261,6 @@ def _first_indexable_cell(worksheet):
 
 
 def _cell_count(worksheet) -> int:
-    return sum(1 for row in worksheet.iter_rows() for cell in row if _is_indexable_cell(cell))
+    return sum(
+        1 for row in worksheet.iter_rows() for cell in row if _is_indexable_cell(cell)
+    )

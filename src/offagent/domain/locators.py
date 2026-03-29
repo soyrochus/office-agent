@@ -114,7 +114,9 @@ def _to_format_locator(locator: str, *, expected: FileType) -> str:
     return parsed.canonical_locator
 
 
-def _to_legacy_from_components(file_type: FileType, components: tuple[str, ...], raw: str) -> str:
+def _to_legacy_from_components(
+    file_type: FileType, components: tuple[str, ...], raw: str
+) -> str:
     if file_type == "docx":
         if len(components) == 3 and components[:2] == ("docx", "para"):
             return f"para:{components[2]}"
@@ -139,7 +141,11 @@ def _to_legacy_from_components(file_type: FileType, components: tuple[str, ...],
             return f"sheet:{components[2]}"
         if len(components) == 4 and components[:2] == ("xlsx", "sheet"):
             return f"sheet:{components[2]}!{components[3]}"
-        if len(components) == 5 and components[:2] == ("xlsx", "sheet") and components[3] == "formula_cell":
+        if (
+            len(components) == 5
+            and components[:2] == ("xlsx", "sheet")
+            and components[3] == "formula_cell"
+        ):
             return f"sheet:{components[2]}!{components[4]}"
         raise ValueError(f"Unsupported xlsx locator for legacy conversion: {raw}")
 
@@ -258,7 +264,15 @@ def _parse_docx_locator(raw: str) -> _ParsedDirectLocator:
         file_type="docx",
         target_hint="table_cell",
         canonical_locator=canonical,
-        components=("docx", "table", str(table_index), "row", str(row_index), "cell", str(column_index)),
+        components=(
+            "docx",
+            "table",
+            str(table_index),
+            "row",
+            str(row_index),
+            "cell",
+            str(column_index),
+        ),
     )
 
 

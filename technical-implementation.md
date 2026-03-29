@@ -23,7 +23,7 @@ This document describes the complete technical architecture and implementation o
    - 9.3 [Write-Reindex Synchronization](#93-write-reindex-synchronization)
 10. [Application Services Layer](#10-application-services-layer)
 11. [MCP Interface](#11-mcp-interface)
-    - 11.1 [Tool Surface (11 tools)](#111-tool-surface-11-tools)
+    - 11.1 [Tool Surface](#111-tool-surface)
     - 11.2 [MCP Models and Converters](#112-mcp-models-and-converters)
     - 11.3 [Error Mapping](#113-error-mapping)
     - 11.4 [Universal Locator Address Space](#114-universal-locator-address-space)
@@ -46,7 +46,7 @@ This document describes the complete technical architecture and implementation o
 `offagent` enables AI agents and human operators to discover, inspect, and edit Office documents (`.docx`, `.pptx`, `.xlsx`) using a combination of full-text search, optional semantic (vector) search, and item-level read/write operations. The system is:
 
 - **Local-first**: All state is stored in a local SQLite database. No remote service is required.
-- **MCP-ready**: Exposes an 11-tool Model Context Protocol server over stdio so any MCP client (including Claude) can drive document operations.
+- **MCP-ready**: Exposes a FastMCP server over stdio with document-management, search, structure, node, authoring, styling, V2 object, and format-specific escape-hatch tools.
 - **CLI-driven**: Provides the same capabilities through a Typer-based command-line interface.
 - **Non-destructive**: Writes produce versioned output files by default and never delete source documents, execute macros, or dereference external links.
 
@@ -124,7 +124,7 @@ Key settings:
 | `document_roots` | list[path] | Directories scanned when indexing without explicit paths |
 | `allowed_roots` | list[path] | Read-operation whitelist (policy enforcement) |
 | `output_roots` | list[path] | Write-operation whitelist (policy enforcement) |
-| `allow_inplace_overwrite` | bool | Enables in-place write mode (default: `false`) |
+| `allow_inplace_overwrite` | bool | Enables in-place write mode (default: `true`) |
 | `embedding.model` | str | FastEmbed model name (default: `BAAI/bge-small-en-v1.5`) |
 | `embedding.dimensions` | int | Vector dimension (default: `384`) |
 | `embedding.keyword_weight` | float | Hybrid search keyword weight |
@@ -483,19 +483,25 @@ Core `AppServices` methods:
 
 | Method | Description |
 |---|---|
-| `index_documents(paths, with_embeddings)` | Walk paths, extract items, populate index |
+| `index_path(path, with_embeddings=False)` / `reindex_path(path, with_embeddings=False)` | Walk one path, extract items, and populate or refresh the index |
 | `refresh_document(document_id)` | Reindex one document by ID |
 | `list_documents()` | Return all `DocumentRef` records |
-| `search_documents(query, mode, file_type, document_id, limit)` | FTS5 / semantic / hybrid search |
+| `search_corpus(query, file_type=None, document_path=None, limit=20, mode="keyword")` | FTS5 / semantic / hybrid search |
 | `get_structure(document_id)` | Return format-aware section outline |
 | `get_section(document_id, section_id, cell_range)` | Return full section payload |
 | `get_node(document_id, node_id)` | Read single leaf node from live file |
 | `write_node(document_id, node_id, content, output_mode)` | Replace node content, reindex output |
 | `insert_content(document_id, content, style_name, after_node_id, output_mode)` | DOCX-only paragraph insertion |
+| `create_document(format, output_path, initial_sheet_name, output_mode)` | Create and index an empty Office document |
+| `add_content_block(document_id, block_type, properties, output_mode)` | Compact format-aware authoring entrypoint |
+| `style_inline(document_id, locator, style, clear_fields, text_range, output_mode)` | Inline styling, including partial-formatting ranges where supported |
+| `style_block(document_id, locator, style, clear_fields, output_mode)` | Block-level styling for paragraph-like targets |
+| `set_structural_role(document_id, locator, role, level, output_mode)` | DOCX structural role mapping to Word-native styles |
+| `get_object(...)`, `list_children(...)`, `create_object(...)`, `update_object(...)`, `move_object(...)`, `copy_object(...)`, `batch_edit(...)`, `delete_object(...)` | Generic V2 object traversal and mutation layer |
 | `xlsx_insert_rows(document_id, sheet_name, rows, records, output_mode)` | XLSX-only row append |
 | `docx_get_tables(document_id)` | DOCX-only table extraction |
 
-The services layer dispatches to the appropriate format adapter based on `DocumentRef.file_type`. Format-specific operations (`insert_content`, `xlsx_insert_rows`, `docx_get_tables`) raise `UnsupportedFormatError` when called on an incompatible document type.
+The services layer dispatches to the appropriate format adapter based on `DocumentRef.file_type`. Format-specific operations (`insert_content`, `xlsx_insert_rows`, `docx_get_tables`, DOCX/PPTX/XLSX escape hatches) raise validation errors when called on incompatible document types, while generic V2 mutations are capability-gated per object type.
 
 ---
 
@@ -505,47 +511,83 @@ The services layer dispatches to the appropriate format adapter based on `Docume
 
 `interfaces/mcp.py` builds a [FastMCP](https://github.com/jlowin/fastmcp) server with stdio transport. Entry point: `offagent mcp [--config path]`.
 
-### 11.1 Tool Surface (11 tools)
+### 11.1 Tool Surface
 
-The MCP server exposes exactly **11 tools**. This count is a first-class acceptance criterion verified by the integration suite.
+The MCP server exposes a layered tool surface rather than a fixed 11-tool contract. The current surface is grouped into document management, search, structure and node access, document authoring and styling, V2 object traversal and mutation, and format-specific escape hatches.
 
-**Document management (3 tools)**:
+**Document management**:
 
 | Tool | Inputs | Description |
 |---|---|---|
-| `index_documents` | `paths: list[str]`, `with_embeddings: bool = false` | Index or re-index files and directories |
+| `index_documents` | `paths: list[str]` | Index or re-index files and directories |
 | `refresh_document` | `document_id: str` | Reindex a single previously-indexed document |
 | `list_documents` | _(none)_ | Return all indexed documents |
+| `create_document` | `format: str`, `output_path: str`, `initial_sheet_name?: str`, `output_mode?: str` | Create and immediately index a new empty DOCX, PPTX, or XLSX document |
 
-**Search (1 tool)**:
+**Search**:
 
 | Tool | Inputs | Description |
 |---|---|---|
-| `search_documents` | `query: str`, `mode: "keyword"\|"semantic"\|"hybrid" = "keyword"`, `file_type?: str`, `document_id?: str`, `limit: int = 10` | Search indexed content |
+| `search_objects` | `query: str`, `mode: "keyword"\|"semantic"\|"hybrid" = "keyword"`, `file_type?: str`, `document_id?: str`, `limit: int = 20` | Canonical V2 search over indexed content returning object locators |
+| `search_documents` | same shape as `search_objects` | Deprecated alias preserving the pre-V2 response model |
 
-**Structure inspection (2 tools)**:
+**Structure inspection**:
 
 | Tool | Inputs | Description |
 |---|---|---|
 | `get_structure` | `document_id: str` | Format-aware section outline |
 | `get_section` | `document_id: str`, `section_id: str`, `cell_range?: str` | Full section payload |
 
-**Node access (2 tools)**:
+**Node access**:
 
 | Tool | Inputs | Description |
 |---|---|---|
 | `get_node` | `document_id: str`, `node_id: str` | Read single leaf node from live file |
 | `write_node` | `document_id: str`, `node_id: str`, `content: str`, `output_mode?: "versioned"\|"inplace"` | Replace node content |
 
-**Format-specific tools (3 tools)**:
+**Authoring and styling**:
 
 | Tool | Inputs | Description |
 |---|---|---|
-| `insert_content` | `document_id: str`, `content: str`, `style_name?: str`, `after_node_id?: str`, `output_mode?: str` | DOCX-only: insert paragraph |
-| `xlsx_insert_rows` | `document_id: str`, `sheet_name: str`, `rows?: list[list[str]]`, `records?: list[dict]`, `output_mode?: str` | XLSX-only: append rows |
-| `docx_get_tables` | `document_id: str` | DOCX-only: extract all tables |
+| `insert_content` | `document_id: str`, `content: str`, `style_name?: str`, `after_node_id?: str`, `output_mode?: str` | DOCX-only paragraph insertion |
+| `add_content_block` | `document_id: str`, `block_type: str`, `properties: dict`, `output_mode?: str` | Compact format-aware authoring entrypoint |
+| `style_inline` | `document_id: str`, `locator: str`, `style: dict`, `range?: {start, end}`, `clear_fields?: list[str]`, `output_mode?: str` | Inline styling and partial inline formatting |
+| `style_block` | `document_id: str`, `locator: str`, `style: dict`, `clear_fields?: list[str]`, `output_mode?: str` | Block-level styling for paragraph-like targets |
+| `set_structural_role` | `document_id: str`, `locator: str`, `role: str`, `level?: int`, `output_mode?: str` | DOCX structural role mapping |
+| `docx_get_tables` | `document_id: str` | DOCX-only table extraction |
 
-**Tools removed from previous surface** (not registered): `locate_item`, `read_item`, `replace_text`, `append_text`, `write_cell`, `append_paragraph`, `append_row`, `replace_block`, `write_table`, `get_document_structure`, `get_document_blocks`, `get_paragraphs`, `get_presentation_structure`, `get_slide_bundle`, `get_slide_notes`, `get_workbook_structure`, `get_sheet_snapshot`, `get_block_bundle`.
+**V2 object traversal and mutation**:
+
+| Tool | Inputs | Description |
+|---|---|---|
+| `get_object` | `document_id: str`, `locator: str` | Return a structured object payload for one typed locator |
+| `list_children` | `document_id: str`, `locator: str`, `child_type?: str`, `limit?: int` | Traverse children below a typed object |
+| `create_object` | `document_id: str`, `parent_locator: str`, `object_type: str`, `properties: dict`, `segments?: list[dict]`, `range?: dict`, `position?: object`, `output_mode?: str` | Create a child object |
+| `update_object` | `document_id: str`, `locator: str`, `properties: dict`, `segments?: list[dict]`, `range?: dict`, `output_mode?: str` | Update an editable object |
+| `move_object` | `document_id: str`, `locator: str`, `new_parent_locator: str`, `position?: object`, `output_mode?: str` | Move an object |
+| `copy_object` | `document_id: str`, `locator: str`, `target_parent_locator: str`, `position?: object`, `output_mode?: str` | Copy an object |
+| `batch_edit` | `document_id: str`, `operations: list[dict]`, `output_mode?: str`, `dry_run?: bool` | Apply a sequence of V2 mutations atomically |
+| `delete_object` | `document_id: str`, `locator: str`, `output_mode?: str` | Delete an object when the capability model allows it |
+
+**Format-specific escape hatches**:
+
+| Tool | Inputs | Description |
+|---|---|---|
+| `docx_set_paragraph_style` | `document_id: str`, `locator: str`, `style_name: str`, `output_mode?: str` | Apply a named Word paragraph style |
+| `docx_insert_page_break` | `document_id: str`, `locator: str`, `output_mode?: str` | Insert a page break after a paragraph |
+| `docx_add_table` | `document_id: str`, `row_count: int`, `column_count: int`, `position?: object`, `column_widths?: list[int]`, `style_name?: str`, `output_mode?: str` | Insert a DOCX table |
+| `docx_merge_table_cells` | `document_id: str`, `start_locator: str`, `end_locator: str`, `output_mode?: str` | Merge a rectangular DOCX cell range |
+| `pptx_add_slide` | `document_id: str`, `layout_index?: int`, `layout_name?: str`, `output_mode?: str` | Add a slide |
+| `pptx_duplicate_slide` | `document_id: str`, `locator: str`, `position?: int`, `output_mode?: str` | Duplicate a slide |
+| `pptx_set_slide_layout` | `document_id: str`, `locator: str`, `layout_index?: int`, `layout_name?: str`, `output_mode?: str` | Reassign a slide layout |
+| `pptx_add_text_shape` | `document_id: str`, `locator: str`, `text: str`, `left: int`, `top: int`, `width: int`, `height: int`, `output_mode?: str` | Insert a text box |
+| `xlsx_write_range` | `document_id: str`, `locator: str`, `values: list[list[object]]`, `output_mode?: str` | Write a 2D grid into a range |
+| `xlsx_insert_rows` | append mode via `sheet_name` + `rows`/`records`, or insertion mode via `locator` + `row_number` + `count` | Append or insert worksheet rows |
+| `xlsx_insert_columns` | `document_id: str`, `locator: str`, `column_index: int`, `count: int`, `output_mode?: str` | Insert worksheet columns |
+| `xlsx_set_formula` | `document_id: str`, `locator: str`, `formula: str`, `output_mode?: str` | Write a formula |
+| `xlsx_merge_cells` | `document_id: str`, `locator: str`, `output_mode?: str` | Merge an XLSX cell range |
+
+The legacy surface is still reflected in the CLI, and `search_documents` remains available for MCP compatibility, but the MCP server is now centered on canonical V2 search, typed object traversal, generic mutations, and authoring/styling workflows.
 
 ### 11.2 MCP Models and Converters
 
@@ -578,7 +620,8 @@ No unhandled Python exceptions are allowed to escape the tool handlers. All `Exc
 
 The system guarantees a **single unified address space** across all tools. Specifically:
 
-- Every `locator` field in a `search_documents` response is directly usable as `node_id` in `get_node` and `write_node` — no transformation needed.
+- Every `locator` field in a `search_objects` response is directly usable as `node_id` in `get_node` and `write_node`, and object locators are directly reusable with `get_object` and `list_children`.
+- Every `locator` field in a `search_documents` response remains usable in compatibility workflows.
 - Every `locator` in a `get_structure` response is directly usable as `section_id` in `get_section`.
 - Every leaf-node locator in a `get_section` response is directly usable as `node_id` in `get_node` and `write_node`.
 
@@ -743,11 +786,12 @@ The test suite covers:
 - Exit code correctness for each error scenario
 
 **MCP integration tests**:
-- Tool count: exactly 11 tools registered
+- Tool registration includes the expected canonical search, V2 object, authoring/styling, and escape-hatch tools
 - Schema validation: each tool's input schema matches `mcp_models.py`
 - Round-trip: index → search → get_node → write_node (all three formats)
 - Structure round-trip: get_structure → get_section → write_node
-- Universal locator invariant: search locator usable in write_node without transformation
+- Universal locator invariant: search and structure locators are reusable across node and object workflows without transformation
+- Partial-formatting schema exposure and mutation coverage for `segments` and `range`
 - Format-specific error: `insert_content` on PPTX returns explicit format error
 - Format-specific error: `xlsx_insert_rows` on DOCX returns explicit format error
 
@@ -766,8 +810,8 @@ The test suite covers:
    → FTS5 rebuild
    → Returns: {document_id: "a1b2...", item_count: 42}
 
-2. MCP client calls: search_documents(query="quarterly revenue", mode="keyword")
-   → AppServices.search_documents()
+2. MCP client calls: search_objects(query="quarterly revenue", mode="keyword")
+    → AppServices.search_corpus()
    → store.fts_search("quarterly revenue", limit=10)
    → Returns: [{item_id: "para:7", locator: "para:7", preview: "Q3 quarterly revenue...", score: 0.91}]
 

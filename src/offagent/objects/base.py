@@ -20,5 +20,7 @@ class ObjectResolver(Protocol):
     ) -> list[ChildSummary]:
         """Return ordered child objects for a container locator."""
 
-    def resolve_capabilities(self, document_path: Path, locator: str) -> frozenset[Capability]:
+    def resolve_capabilities(
+        self, document_path: Path, locator: str
+    ) -> frozenset[Capability]:
         """Compute live capabilities for a locator."""

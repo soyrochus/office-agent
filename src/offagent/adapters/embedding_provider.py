@@ -9,7 +9,9 @@ from typing import Protocol
 
 try:
     from fastembed import TextEmbedding as FastEmbedTextEmbedding
-except ModuleNotFoundError:  # pragma: no cover - exercised by tests that simulate missing dependency
+except (
+    ModuleNotFoundError
+):  # pragma: no cover - exercised by tests that simulate missing dependency
     FastEmbedTextEmbedding = None
 
 DEFAULT_EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"

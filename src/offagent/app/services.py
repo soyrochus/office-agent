@@ -15,7 +15,12 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Iterable, Literal, Sequence
 
-from offagent.adapters import docx_adapter, embedding_provider, pptx_adapter, xlsx_adapter
+from offagent.adapters import (
+    docx_adapter,
+    embedding_provider,
+    pptx_adapter,
+    xlsx_adapter,
+)
 from offagent.app.progress import NullProgressReporter, ProgressReporter
 from offagent.config import AppConfig
 from offagent.domain.locators import parse_locator, to_legacy_locator, to_v2_locator
@@ -27,7 +32,6 @@ from offagent.domain.models import (
     Capability,
     DocxTableEntry,
     DocxTablesResult,
-    DocumentBlock,
     DocumentBlocks,
     DocumentRef,
     DocumentStructure,
@@ -55,7 +59,6 @@ from offagent.domain.models import (
     TableCollection,
     VisibleTextRange,
     WorkbookStructure,
-    WorksheetSummary,
     XlsxInsertRowsResult,
     XlsxRowEmbedding,
 )
@@ -147,10 +150,13 @@ class PatchResult:
 @dataclass
 class AppServices:
     config: AppConfig
-    embedding_provider_factory: Callable[
-        [str, int | None],
-        embedding_provider.EmbeddingProvider,
-    ] | None = None
+    embedding_provider_factory: (
+        Callable[
+            [str, int | None],
+            embedding_provider.EmbeddingProvider,
+        ]
+        | None
+    ) = None
     _embedding_provider: embedding_provider.EmbeddingProvider | None = field(
         default=None,
         init=False,
@@ -159,7 +165,11 @@ class AppServices:
 
     def discover_documents(self) -> list[DocumentRef]:
         documents = discover_documents(self.config.document_roots)
-        return [document for document in documents if self._is_allowed_document_path(document.path)]
+        return [
+            document
+            for document in documents
+            if self._is_allowed_document_path(document.path)
+        ]
 
     def list_documents(self) -> list[DocumentRef]:
         connection = store.ensure_ready(self.config.index_path)
@@ -186,7 +196,9 @@ class AppServices:
     def show_document(self, document_path: Path) -> DocumentRef:
         connection = store.ensure_ready(self.config.index_path)
         try:
-            resolved_path, _ = self._require_allowed_document_path(document_path, action="show")
+            resolved_path, _ = self._require_allowed_document_path(
+                document_path, action="show"
+            )
             document_row = self._resolve_document_row(connection, resolved_path)
         finally:
             connection.close()
@@ -195,8 +207,12 @@ class AppServices:
     def show_item(self, document_path: Path, item_id: str) -> ItemRef:
         connection = store.ensure_ready(self.config.index_path)
         try:
-            resolved_path, _ = self._require_allowed_document_path(document_path, action="show")
-            document_row, item_row = self._resolve_item_row(connection, resolved_path, item_id)
+            resolved_path, _ = self._require_allowed_document_path(
+                document_path, action="show"
+            )
+            document_row, item_row = self._resolve_item_row(
+                connection, resolved_path, item_id
+            )
         finally:
             connection.close()
         return _item_ref_from_row(item_row)
@@ -259,9 +275,13 @@ class AppServices:
     ) -> SectionPayload:
         document = self.get_document(document_id)
         if document.file_type == "docx":
-            return replace(docx_adapter.get_section(document.path, section_id), document=document)
+            return replace(
+                docx_adapter.get_section(document.path, section_id), document=document
+            )
         if document.file_type == "pptx":
-            return replace(pptx_adapter.get_section(document.path, section_id), document=document)
+            return replace(
+                pptx_adapter.get_section(document.path, section_id), document=document
+            )
         return replace(
             xlsx_adapter.get_section(document.path, section_id, cell_range=cell_range),
             document=document,
@@ -338,7 +358,9 @@ class AppServices:
         self._ensure_object_locator_fresh(document, parent_locator)
         parent = self.get_object(document_id, parent_locator)
         _require_capability(parent.capabilities, Capability.ADD_CHILD, parent_locator)
-        output_path = self._resolve_write_output_path(document.path, output_mode=output_mode)
+        output_path = self._resolve_write_output_path(
+            document.path, output_mode=output_mode
+        )
 
         try:
             locator, summary, metadata = _create_object_on_path(
@@ -352,7 +374,11 @@ class AppServices:
                 text_range=_coerce_visible_text_range(text_range),
                 output_path=output_path,
             )
-        except (InvalidArgumentsError, TargetNotFoundError, TargetNotEditableError) as exc:
+        except (
+            InvalidArgumentsError,
+            TargetNotFoundError,
+            TargetNotEditableError,
+        ) as exc:
             self._raise_stale_if_document_changed(document, parent_locator, exc)
             raise
 
@@ -384,7 +410,9 @@ class AppServices:
         self._ensure_object_locator_fresh(document, locator)
         current = self.get_object(document_id, locator)
         _require_capability(current.capabilities, Capability.UPDATE, locator)
-        output_path = self._resolve_write_output_path(document.path, output_mode=output_mode)
+        output_path = self._resolve_write_output_path(
+            document.path, output_mode=output_mode
+        )
 
         try:
             summary, metadata = _update_object_on_path(
@@ -396,7 +424,11 @@ class AppServices:
                 text_range=_coerce_visible_text_range(text_range),
                 output_path=output_path,
             )
-        except (InvalidArgumentsError, TargetNotFoundError, TargetNotEditableError) as exc:
+        except (
+            InvalidArgumentsError,
+            TargetNotFoundError,
+            TargetNotEditableError,
+        ) as exc:
             self._raise_stale_if_document_changed(document, locator, exc)
             raise
 
@@ -427,7 +459,9 @@ class AppServices:
         self._ensure_object_locator_fresh(document, locator)
         current = self.get_object(document_id, locator)
         _require_capability(current.capabilities, Capability.MOVE, locator)
-        output_path = self._resolve_write_output_path(document.path, output_mode=output_mode)
+        output_path = self._resolve_write_output_path(
+            document.path, output_mode=output_mode
+        )
 
         try:
             moved_locator, summary, metadata = _move_object_on_path(
@@ -438,7 +472,11 @@ class AppServices:
                 position=position,
                 output_path=output_path,
             )
-        except (InvalidArgumentsError, TargetNotFoundError, TargetNotEditableError) as exc:
+        except (
+            InvalidArgumentsError,
+            TargetNotFoundError,
+            TargetNotEditableError,
+        ) as exc:
             self._raise_stale_if_document_changed(document, locator, exc)
             raise
 
@@ -469,7 +507,9 @@ class AppServices:
         self._ensure_object_locator_fresh(document, locator)
         current = self.get_object(document_id, locator)
         _require_capability(current.capabilities, Capability.COPY, locator)
-        output_path = self._resolve_write_output_path(document.path, output_mode=output_mode)
+        output_path = self._resolve_write_output_path(
+            document.path, output_mode=output_mode
+        )
 
         try:
             copied_locator, summary, metadata = _copy_object_on_path(
@@ -480,7 +520,11 @@ class AppServices:
                 position=position,
                 output_path=output_path,
             )
-        except (InvalidArgumentsError, TargetNotFoundError, TargetNotEditableError) as exc:
+        except (
+            InvalidArgumentsError,
+            TargetNotFoundError,
+            TargetNotEditableError,
+        ) as exc:
             self._raise_stale_if_document_changed(document, locator, exc)
             raise
 
@@ -507,7 +551,9 @@ class AppServices:
         dry_run: bool = False,
     ) -> BatchResult:
         document = self.get_document(document_id)
-        self._ensure_object_locator_fresh(document, _primary_locator_for_batch(operations))
+        self._ensure_object_locator_fresh(
+            document, _primary_locator_for_batch(operations)
+        )
         if dry_run:
             validated = tuple(
                 _validate_batch_operation(document.path, document.file_type, operation)
@@ -522,7 +568,9 @@ class AppServices:
                 operations=validated,
             )
 
-        output_path = self._resolve_write_output_path(document.path, output_mode=output_mode)
+        output_path = self._resolve_write_output_path(
+            document.path, output_mode=output_mode
+        )
         temp_work_path = _make_batch_work_path(output_path, document.path.suffix)
         shutil.copy2(document.path, temp_work_path)
         try:
@@ -555,7 +603,9 @@ class AppServices:
         self._ensure_object_locator_fresh(document, locator)
         current = self.get_object(document_id, locator)
         _require_capability(current.capabilities, Capability.DELETE, locator)
-        output_path = self._resolve_write_output_path(document.path, output_mode=output_mode)
+        output_path = self._resolve_write_output_path(
+            document.path, output_mode=output_mode
+        )
 
         try:
             summary, metadata = _delete_object_on_path(
@@ -564,7 +614,11 @@ class AppServices:
                 locator=locator,
                 output_path=output_path,
             )
-        except (InvalidArgumentsError, TargetNotFoundError, TargetNotEditableError) as exc:
+        except (
+            InvalidArgumentsError,
+            TargetNotFoundError,
+            TargetNotEditableError,
+        ) as exc:
             self._raise_stale_if_document_changed(document, locator, exc)
             raise
 
@@ -595,7 +649,9 @@ class AppServices:
             operation="docx_set_paragraph_style",
         )
         self._ensure_object_locator_fresh(document, locator)
-        output_path = self._resolve_write_output_path(document.path, output_mode=output_mode)
+        output_path = self._resolve_write_output_path(
+            document.path, output_mode=output_mode
+        )
         try:
             updated_locator, summary, metadata = docx_objects.set_paragraph_style(
                 document.path,
@@ -603,10 +659,16 @@ class AppServices:
                 style_name,
                 output_path=output_path,
             )
-        except (InvalidArgumentsError, TargetNotFoundError, TargetNotEditableError) as exc:
+        except (
+            InvalidArgumentsError,
+            TargetNotFoundError,
+            TargetNotEditableError,
+        ) as exc:
             self._raise_stale_if_document_changed(document, locator, exc)
             raise
-        return self._finalize_object_mutation(document, output_path, updated_locator, summary, metadata)
+        return self._finalize_object_mutation(
+            document, output_path, updated_locator, summary, metadata
+        )
 
     def docx_insert_page_break(
         self,
@@ -621,17 +683,25 @@ class AppServices:
             operation="docx_insert_page_break",
         )
         self._ensure_object_locator_fresh(document, locator)
-        output_path = self._resolve_write_output_path(document.path, output_mode=output_mode)
+        output_path = self._resolve_write_output_path(
+            document.path, output_mode=output_mode
+        )
         try:
             inserted_locator, summary, metadata = docx_objects.insert_page_break(
                 document.path,
                 locator,
                 output_path=output_path,
             )
-        except (InvalidArgumentsError, TargetNotFoundError, TargetNotEditableError) as exc:
+        except (
+            InvalidArgumentsError,
+            TargetNotFoundError,
+            TargetNotEditableError,
+        ) as exc:
             self._raise_stale_if_document_changed(document, locator, exc)
             raise
-        return self._finalize_object_mutation(document, output_path, inserted_locator, summary, metadata)
+        return self._finalize_object_mutation(
+            document, output_path, inserted_locator, summary, metadata
+        )
 
     def docx_add_table(
         self,
@@ -656,7 +726,9 @@ class AppServices:
             if isinstance(after_locator, str):
                 self._ensure_object_locator_fresh(document, after_locator)
 
-        output_path = self._resolve_write_output_path(document.path, output_mode=output_mode)
+        output_path = self._resolve_write_output_path(
+            document.path, output_mode=output_mode
+        )
         try:
             inserted_locator, summary, metadata = docx_objects.add_table(
                 document.path,
@@ -667,7 +739,11 @@ class AppServices:
                 style_name=style_name,
                 output_path=output_path,
             )
-        except (InvalidArgumentsError, TargetNotFoundError, TargetNotEditableError) as exc:
+        except (
+            InvalidArgumentsError,
+            TargetNotFoundError,
+            TargetNotEditableError,
+        ) as exc:
             stale_locator = None
             if isinstance(position, str):
                 stale_locator = position
@@ -675,9 +751,13 @@ class AppServices:
                 maybe_locator = position.get("after") or position.get("after_locator")
                 if isinstance(maybe_locator, str):
                     stale_locator = maybe_locator
-            self._raise_stale_if_document_changed(document, stale_locator or "docx:document", exc)
+            self._raise_stale_if_document_changed(
+                document, stale_locator or "docx:document", exc
+            )
             raise
-        return self._finalize_object_mutation(document, output_path, inserted_locator, summary, metadata)
+        return self._finalize_object_mutation(
+            document, output_path, inserted_locator, summary, metadata
+        )
 
     def docx_merge_table_cells(
         self,
@@ -694,7 +774,9 @@ class AppServices:
         )
         self._ensure_object_locator_fresh(document, start_locator)
         self._ensure_object_locator_fresh(document, end_locator)
-        output_path = self._resolve_write_output_path(document.path, output_mode=output_mode)
+        output_path = self._resolve_write_output_path(
+            document.path, output_mode=output_mode
+        )
         try:
             merged_locator, summary, metadata = docx_objects.merge_table_cells(
                 document.path,
@@ -702,10 +784,16 @@ class AppServices:
                 end_locator,
                 output_path=output_path,
             )
-        except (InvalidArgumentsError, TargetNotFoundError, TargetNotEditableError) as exc:
+        except (
+            InvalidArgumentsError,
+            TargetNotFoundError,
+            TargetNotEditableError,
+        ) as exc:
             self._raise_stale_if_document_changed(document, start_locator, exc)
             raise
-        return self._finalize_object_mutation(document, output_path, merged_locator, summary, metadata)
+        return self._finalize_object_mutation(
+            document, output_path, merged_locator, summary, metadata
+        )
 
     def pptx_add_slide(
         self,
@@ -715,15 +803,21 @@ class AppServices:
         layout_name: str | None = None,
         output_mode: OutputMode = "versioned",
     ) -> MutationResult:
-        document = self._require_document_type(document_id, expected="pptx", operation="pptx_add_slide")
-        output_path = self._resolve_write_output_path(document.path, output_mode=output_mode)
+        document = self._require_document_type(
+            document_id, expected="pptx", operation="pptx_add_slide"
+        )
+        output_path = self._resolve_write_output_path(
+            document.path, output_mode=output_mode
+        )
         inserted_locator, summary, metadata = pptx_objects.add_slide(
             document.path,
             layout_index=layout_index,
             layout_name=layout_name,
             output_path=output_path,
         )
-        return self._finalize_object_mutation(document, output_path, inserted_locator, summary, metadata)
+        return self._finalize_object_mutation(
+            document, output_path, inserted_locator, summary, metadata
+        )
 
     def pptx_duplicate_slide(
         self,
@@ -739,7 +833,9 @@ class AppServices:
             operation="pptx_duplicate_slide",
         )
         self._ensure_object_locator_fresh(document, locator)
-        output_path = self._resolve_write_output_path(document.path, output_mode=output_mode)
+        output_path = self._resolve_write_output_path(
+            document.path, output_mode=output_mode
+        )
         try:
             copied_locator, summary, metadata = pptx_objects.duplicate_slide(
                 document.path,
@@ -747,10 +843,16 @@ class AppServices:
                 position=position,
                 output_path=output_path,
             )
-        except (InvalidArgumentsError, TargetNotFoundError, TargetNotEditableError) as exc:
+        except (
+            InvalidArgumentsError,
+            TargetNotFoundError,
+            TargetNotEditableError,
+        ) as exc:
             self._raise_stale_if_document_changed(document, locator, exc)
             raise
-        return self._finalize_object_mutation(document, output_path, copied_locator, summary, metadata)
+        return self._finalize_object_mutation(
+            document, output_path, copied_locator, summary, metadata
+        )
 
     def pptx_set_slide_layout(
         self,
@@ -767,7 +869,9 @@ class AppServices:
             operation="pptx_set_slide_layout",
         )
         self._ensure_object_locator_fresh(document, locator)
-        output_path = self._resolve_write_output_path(document.path, output_mode=output_mode)
+        output_path = self._resolve_write_output_path(
+            document.path, output_mode=output_mode
+        )
         try:
             updated_locator, summary, metadata = pptx_objects.set_slide_layout(
                 document.path,
@@ -776,10 +880,16 @@ class AppServices:
                 layout_name=layout_name,
                 output_path=output_path,
             )
-        except (InvalidArgumentsError, TargetNotFoundError, TargetNotEditableError) as exc:
+        except (
+            InvalidArgumentsError,
+            TargetNotFoundError,
+            TargetNotEditableError,
+        ) as exc:
             self._raise_stale_if_document_changed(document, locator, exc)
             raise
-        return self._finalize_object_mutation(document, output_path, updated_locator, summary, metadata)
+        return self._finalize_object_mutation(
+            document, output_path, updated_locator, summary, metadata
+        )
 
     def pptx_add_text_shape(
         self,
@@ -799,7 +909,9 @@ class AppServices:
             operation="pptx_add_text_shape",
         )
         self._ensure_object_locator_fresh(document, locator)
-        output_path = self._resolve_write_output_path(document.path, output_mode=output_mode)
+        output_path = self._resolve_write_output_path(
+            document.path, output_mode=output_mode
+        )
         try:
             added_locator, summary, metadata = pptx_objects.add_text_shape(
                 document.path,
@@ -811,10 +923,16 @@ class AppServices:
                 height=height,
                 output_path=output_path,
             )
-        except (InvalidArgumentsError, TargetNotFoundError, TargetNotEditableError) as exc:
+        except (
+            InvalidArgumentsError,
+            TargetNotFoundError,
+            TargetNotEditableError,
+        ) as exc:
             self._raise_stale_if_document_changed(document, locator, exc)
             raise
-        return self._finalize_object_mutation(document, output_path, added_locator, summary, metadata)
+        return self._finalize_object_mutation(
+            document, output_path, added_locator, summary, metadata
+        )
 
     def xlsx_write_range(
         self,
@@ -824,9 +942,13 @@ class AppServices:
         *,
         output_mode: OutputMode = "versioned",
     ) -> MutationResult:
-        document = self._require_document_type(document_id, expected="xlsx", operation="xlsx_write_range")
+        document = self._require_document_type(
+            document_id, expected="xlsx", operation="xlsx_write_range"
+        )
         self._ensure_object_locator_fresh(document, locator)
-        output_path = self._resolve_write_output_path(document.path, output_mode=output_mode)
+        output_path = self._resolve_write_output_path(
+            document.path, output_mode=output_mode
+        )
         try:
             updated_locator, summary, metadata = xlsx_objects.write_range(
                 document.path,
@@ -834,10 +956,16 @@ class AppServices:
                 values,
                 output_path=output_path,
             )
-        except (InvalidArgumentsError, TargetNotFoundError, TargetNotEditableError) as exc:
+        except (
+            InvalidArgumentsError,
+            TargetNotFoundError,
+            TargetNotEditableError,
+        ) as exc:
             self._raise_stale_if_document_changed(document, locator, exc)
             raise
-        return self._finalize_object_mutation(document, output_path, updated_locator, summary, metadata)
+        return self._finalize_object_mutation(
+            document, output_path, updated_locator, summary, metadata
+        )
 
     def xlsx_insert_rows_at(
         self,
@@ -848,9 +976,13 @@ class AppServices:
         *,
         output_mode: OutputMode = "versioned",
     ) -> MutationResult:
-        document = self._require_document_type(document_id, expected="xlsx", operation="xlsx_insert_rows")
+        document = self._require_document_type(
+            document_id, expected="xlsx", operation="xlsx_insert_rows"
+        )
         self._ensure_object_locator_fresh(document, locator)
-        output_path = self._resolve_write_output_path(document.path, output_mode=output_mode)
+        output_path = self._resolve_write_output_path(
+            document.path, output_mode=output_mode
+        )
         try:
             inserted_locator, summary, metadata = xlsx_objects.insert_rows(
                 document.path,
@@ -859,10 +991,16 @@ class AppServices:
                 count,
                 output_path=output_path,
             )
-        except (InvalidArgumentsError, TargetNotFoundError, TargetNotEditableError) as exc:
+        except (
+            InvalidArgumentsError,
+            TargetNotFoundError,
+            TargetNotEditableError,
+        ) as exc:
             self._raise_stale_if_document_changed(document, locator, exc)
             raise
-        return self._finalize_object_mutation(document, output_path, inserted_locator, summary, metadata)
+        return self._finalize_object_mutation(
+            document, output_path, inserted_locator, summary, metadata
+        )
 
     def xlsx_insert_columns(
         self,
@@ -879,7 +1017,9 @@ class AppServices:
             operation="xlsx_insert_columns",
         )
         self._ensure_object_locator_fresh(document, locator)
-        output_path = self._resolve_write_output_path(document.path, output_mode=output_mode)
+        output_path = self._resolve_write_output_path(
+            document.path, output_mode=output_mode
+        )
         try:
             inserted_locator, summary, metadata = xlsx_objects.insert_columns(
                 document.path,
@@ -888,10 +1028,16 @@ class AppServices:
                 count,
                 output_path=output_path,
             )
-        except (InvalidArgumentsError, TargetNotFoundError, TargetNotEditableError) as exc:
+        except (
+            InvalidArgumentsError,
+            TargetNotFoundError,
+            TargetNotEditableError,
+        ) as exc:
             self._raise_stale_if_document_changed(document, locator, exc)
             raise
-        return self._finalize_object_mutation(document, output_path, inserted_locator, summary, metadata)
+        return self._finalize_object_mutation(
+            document, output_path, inserted_locator, summary, metadata
+        )
 
     def xlsx_set_formula(
         self,
@@ -901,9 +1047,13 @@ class AppServices:
         *,
         output_mode: OutputMode = "versioned",
     ) -> MutationResult:
-        document = self._require_document_type(document_id, expected="xlsx", operation="xlsx_set_formula")
+        document = self._require_document_type(
+            document_id, expected="xlsx", operation="xlsx_set_formula"
+        )
         self._ensure_object_locator_fresh(document, locator)
-        output_path = self._resolve_write_output_path(document.path, output_mode=output_mode)
+        output_path = self._resolve_write_output_path(
+            document.path, output_mode=output_mode
+        )
         try:
             formula_locator, summary, metadata = xlsx_objects.set_formula(
                 document.path,
@@ -911,10 +1061,16 @@ class AppServices:
                 formula,
                 output_path=output_path,
             )
-        except (InvalidArgumentsError, TargetNotFoundError, TargetNotEditableError) as exc:
+        except (
+            InvalidArgumentsError,
+            TargetNotFoundError,
+            TargetNotEditableError,
+        ) as exc:
             self._raise_stale_if_document_changed(document, locator, exc)
             raise
-        return self._finalize_object_mutation(document, output_path, formula_locator, summary, metadata)
+        return self._finalize_object_mutation(
+            document, output_path, formula_locator, summary, metadata
+        )
 
     def xlsx_merge_cells(
         self,
@@ -923,19 +1079,29 @@ class AppServices:
         *,
         output_mode: OutputMode = "versioned",
     ) -> MutationResult:
-        document = self._require_document_type(document_id, expected="xlsx", operation="xlsx_merge_cells")
+        document = self._require_document_type(
+            document_id, expected="xlsx", operation="xlsx_merge_cells"
+        )
         self._ensure_object_locator_fresh(document, locator)
-        output_path = self._resolve_write_output_path(document.path, output_mode=output_mode)
+        output_path = self._resolve_write_output_path(
+            document.path, output_mode=output_mode
+        )
         try:
             merged_locator, summary, metadata = xlsx_objects.merge_cells(
                 document.path,
                 locator,
                 output_path=output_path,
             )
-        except (InvalidArgumentsError, TargetNotFoundError, TargetNotEditableError) as exc:
+        except (
+            InvalidArgumentsError,
+            TargetNotFoundError,
+            TargetNotEditableError,
+        ) as exc:
             self._raise_stale_if_document_changed(document, locator, exc)
             raise
-        return self._finalize_object_mutation(document, output_path, merged_locator, summary, metadata)
+        return self._finalize_object_mutation(
+            document, output_path, merged_locator, summary, metadata
+        )
 
     def create_document(
         self,
@@ -955,7 +1121,9 @@ class AppServices:
                 f"create_document output path must use the .{normalized_format} extension."
             )
 
-        target_path = self._resolve_create_output_path(requested_path, output_mode=output_mode)
+        target_path = self._resolve_create_output_path(
+            requested_path, output_mode=output_mode
+        )
         if normalized_format == "docx":
             docx_adapter.create_docx(target_path)
             locator = "docx:document"
@@ -993,7 +1161,9 @@ class AppServices:
     ) -> MutationResult:
         document = self.get_document(document_id)
         normalized_block_type = str(block_type).strip().lower()
-        output_path = self._resolve_write_output_path(document.path, output_mode=output_mode)
+        output_path = self._resolve_write_output_path(
+            document.path, output_mode=output_mode
+        )
 
         try:
             locator = self._dispatch_add_content_block(
@@ -1002,17 +1172,24 @@ class AppServices:
                 properties,
                 output_path,
             )
-        except (InvalidArgumentsError, TargetNotFoundError, TargetNotEditableError) as exc:
+        except (
+            InvalidArgumentsError,
+            TargetNotFoundError,
+            TargetNotEditableError,
+        ) as exc:
             stale_locator = next(
                 (
                     value
                     for key, value in properties.items()
-                    if key in {"locator", "slide", "slide_locator", "sheet", "sheet_locator"}
+                    if key
+                    in {"locator", "slide", "slide_locator", "sheet", "sheet_locator"}
                     and isinstance(value, str)
                 ),
                 "docx:document" if document.file_type == "docx" else None,
             )
-            self._raise_stale_if_document_changed(document, stale_locator or document.path.as_posix(), exc)
+            self._raise_stale_if_document_changed(
+                document, stale_locator or document.path.as_posix(), exc
+            )
             raise
 
         output_document = self.index_document(output_path)
@@ -1041,19 +1218,23 @@ class AppServices:
     ) -> MutationResult:
         document = self.get_document(document_id)
         self._ensure_object_locator_fresh(document, locator)
-        output_path = self._resolve_write_output_path(document.path, output_mode=output_mode)
+        output_path = self._resolve_write_output_path(
+            document.path, output_mode=output_mode
+        )
         clear_list = [] if clear_fields is None else list(clear_fields)
         range_value = _coerce_visible_text_range(text_range)
 
         try:
             if document.file_type == "docx" and range_value is not None:
-                output_path, result_locator, metadata = docx_adapter.style_paragraph_range(
-                    document.path,
-                    locator,
-                    range_value,
-                    style,
-                    clear_list,
-                    output_path=output_path,
+                output_path, result_locator, metadata = (
+                    docx_adapter.style_paragraph_range(
+                        document.path,
+                        locator,
+                        range_value,
+                        style,
+                        clear_list,
+                        output_path=output_path,
+                    )
                 )
             elif document.file_type == "docx":
                 output_path, result_locator, metadata = docx_adapter.style_run(
@@ -1064,13 +1245,15 @@ class AppServices:
                     output_path=output_path,
                 )
             elif document.file_type == "pptx" and range_value is not None:
-                output_path, result_locator, metadata = pptx_adapter.style_paragraph_range(
-                    document.path,
-                    locator,
-                    range_value,
-                    style,
-                    clear_list,
-                    output_path=output_path,
+                output_path, result_locator, metadata = (
+                    pptx_adapter.style_paragraph_range(
+                        document.path,
+                        locator,
+                        range_value,
+                        style,
+                        clear_list,
+                        output_path=output_path,
+                    )
                 )
             elif document.file_type == "pptx":
                 output_path, result_locator, metadata = pptx_adapter.style_run(
@@ -1097,7 +1280,11 @@ class AppServices:
                     clear_list,
                     output_path=output_path,
                 )
-        except (InvalidArgumentsError, TargetNotFoundError, TargetNotEditableError) as exc:
+        except (
+            InvalidArgumentsError,
+            TargetNotFoundError,
+            TargetNotEditableError,
+        ) as exc:
             self._raise_stale_if_document_changed(document, locator, exc)
             raise
 
@@ -1126,7 +1313,9 @@ class AppServices:
     ) -> MutationResult:
         document = self.get_document(document_id)
         self._ensure_object_locator_fresh(document, locator)
-        output_path = self._resolve_write_output_path(document.path, output_mode=output_mode)
+        output_path = self._resolve_write_output_path(
+            document.path, output_mode=output_mode
+        )
         clear_list = [] if clear_fields is None else list(clear_fields)
 
         try:
@@ -1154,7 +1343,11 @@ class AppServices:
                     clear_list,
                     output_path=output_path,
                 )
-        except (InvalidArgumentsError, TargetNotFoundError, TargetNotEditableError) as exc:
+        except (
+            InvalidArgumentsError,
+            TargetNotFoundError,
+            TargetNotEditableError,
+        ) as exc:
             self._raise_stale_if_document_changed(document, locator, exc)
             raise
 
@@ -1187,7 +1380,9 @@ class AppServices:
             operation="set_structural_role",
         )
         self._ensure_object_locator_fresh(document, locator)
-        output_path = self._resolve_write_output_path(document.path, output_mode=output_mode)
+        output_path = self._resolve_write_output_path(
+            document.path, output_mode=output_mode
+        )
         try:
             output_path, result_locator, metadata = docx_adapter.set_structural_role(
                 document.path,
@@ -1196,7 +1391,11 @@ class AppServices:
                 level,
                 output_path=output_path,
             )
-        except (InvalidArgumentsError, TargetNotFoundError, TargetNotEditableError) as exc:
+        except (
+            InvalidArgumentsError,
+            TargetNotFoundError,
+            TargetNotEditableError,
+        ) as exc:
             self._raise_stale_if_document_changed(document, locator, exc)
             raise
 
@@ -1224,16 +1423,28 @@ class AppServices:
     ) -> NodeWriteResult:
         document = self.get_document(document_id)
         source_hash = _content_hash(document.path)
-        output_path = self._resolve_write_output_path(document.path, output_mode=output_mode)
+        output_path = self._resolve_write_output_path(
+            document.path, output_mode=output_mode
+        )
         try:
             previous = self.get_node(document_id, node_id)
             if document.file_type == "docx":
-                output_path = docx_adapter.write_node(document.path, node_id, content, output_path)
+                output_path = docx_adapter.write_node(
+                    document.path, node_id, content, output_path
+                )
             elif document.file_type == "pptx":
-                output_path = pptx_adapter.write_node(document.path, node_id, content, output_path)
+                output_path = pptx_adapter.write_node(
+                    document.path, node_id, content, output_path
+                )
             else:
-                output_path = xlsx_adapter.write_node(document.path, node_id, content, output_path)
-        except (InvalidArgumentsError, TargetNotFoundError, TargetNotEditableError) as exc:
+                output_path = xlsx_adapter.write_node(
+                    document.path, node_id, content, output_path
+                )
+        except (
+            InvalidArgumentsError,
+            TargetNotFoundError,
+            TargetNotEditableError,
+        ) as exc:
             if source_hash != document.content_hash:
                 raise StaleLocatorError(
                     f"stale locator: {node_id} is no longer valid for {document.path}"
@@ -1261,8 +1472,12 @@ class AppServices:
         after_node_id: str | None = None,
         output_mode: OutputMode = "versioned",
     ) -> InsertContentResult:
-        document = self._require_document_type(document_id, expected="docx", operation="insert_content")
-        output_path = self._resolve_write_output_path(document.path, output_mode=output_mode)
+        document = self._require_document_type(
+            document_id, expected="docx", operation="insert_content"
+        )
+        output_path = self._resolve_write_output_path(
+            document.path, output_mode=output_mode
+        )
         output_path, new_node_id = docx_adapter.insert_paragraph(
             document.path,
             content,
@@ -1294,7 +1509,9 @@ class AppServices:
             expected="xlsx",
             operation="xlsx_insert_rows",
         )
-        output_path = self._resolve_write_output_path(document.path, output_mode=output_mode)
+        output_path = self._resolve_write_output_path(
+            document.path, output_mode=output_mode
+        )
         if rows is not None:
             output_path, start_row, _ = xlsx_adapter.write_table(
                 document.path,
@@ -1305,7 +1522,9 @@ class AppServices:
             rows_inserted = len(rows)
         else:
             if records is None:
-                raise InvalidArgumentsError("xlsx_insert_rows requires either rows or records.")
+                raise InvalidArgumentsError(
+                    "xlsx_insert_rows requires either rows or records."
+                )
             output_path, start_row, _ = xlsx_adapter.write_table(
                 document.path,
                 sheet_name,
@@ -1324,7 +1543,9 @@ class AppServices:
         )
 
     def docx_get_tables(self, document_id: str) -> DocxTablesResult:
-        document = self._require_document_type(document_id, expected="docx", operation="docx_get_tables")
+        document = self._require_document_type(
+            document_id, expected="docx", operation="docx_get_tables"
+        )
         tables = tuple(
             DocxTableEntry(
                 locator=docx_adapter.make_table_cell_locator(table.table_index, 0, 0),
@@ -1341,16 +1562,25 @@ class AppServices:
         return DocxTablesResult(document=document, tables=tables)
 
     def get_presentation_structure(self, document_id: str) -> PresentationStructure:
-        document = self._require_document_type(document_id, expected="pptx", operation="get_presentation_structure")
+        document = self._require_document_type(
+            document_id, expected="pptx", operation="get_presentation_structure"
+        )
         result = pptx_adapter.get_presentation_structure(document.path)
         return PresentationStructure(document=document, slides=result)
 
     def get_slide_bundle(self, document_id: str, slide_number: int):
-        document = self._require_document_type(document_id, expected="pptx", operation="get_slide_bundle")
-        return replace(pptx_adapter.get_slide_bundle(document.path, slide_number), document=document)
+        document = self._require_document_type(
+            document_id, expected="pptx", operation="get_slide_bundle"
+        )
+        return replace(
+            pptx_adapter.get_slide_bundle(document.path, slide_number),
+            document=document,
+        )
 
     def get_slide_notes(self, document_id: str, slide_number: int) -> SlideNotes:
-        document = self._require_document_type(document_id, expected="pptx", operation="get_slide_notes")
+        document = self._require_document_type(
+            document_id, expected="pptx", operation="get_slide_notes"
+        )
         return SlideNotes(
             document_id=document.document_id,
             slide_number=slide_number,
@@ -1358,8 +1588,12 @@ class AppServices:
         )
 
     def get_workbook_structure(self, document_id: str) -> WorkbookStructure:
-        document = self._require_document_type(document_id, expected="xlsx", operation="get_workbook_structure")
-        return replace(xlsx_adapter.get_workbook_structure(document.path), document=document)
+        document = self._require_document_type(
+            document_id, expected="xlsx", operation="get_workbook_structure"
+        )
+        return replace(
+            xlsx_adapter.get_workbook_structure(document.path), document=document
+        )
 
     def get_sheet_snapshot(
         self,
@@ -1371,7 +1605,9 @@ class AppServices:
         row_count: int | None = None,
         column_count: int | None = None,
     ) -> SheetSnapshot:
-        document = self._require_document_type(document_id, expected="xlsx", operation="get_sheet_snapshot")
+        document = self._require_document_type(
+            document_id, expected="xlsx", operation="get_sheet_snapshot"
+        )
         return replace(
             xlsx_adapter.get_sheet_snapshot(
                 document.path,
@@ -1385,20 +1621,36 @@ class AppServices:
         )
 
     def get_document_blocks(self, document_id: str) -> DocumentBlocks:
-        document = self._require_document_type(document_id, expected="docx", operation="get_document_blocks")
-        return DocumentBlocks(document=document, blocks=docx_adapter.get_blocks(document.path))
+        document = self._require_document_type(
+            document_id, expected="docx", operation="get_document_blocks"
+        )
+        return DocumentBlocks(
+            document=document, blocks=docx_adapter.get_blocks(document.path)
+        )
 
     def get_paragraphs(self, document_id: str) -> ParagraphCollection:
-        document = self._require_document_type(document_id, expected="docx", operation="get_paragraphs")
-        return ParagraphCollection(document=document, paragraphs=docx_adapter.get_paragraphs(document.path))
+        document = self._require_document_type(
+            document_id, expected="docx", operation="get_paragraphs"
+        )
+        return ParagraphCollection(
+            document=document, paragraphs=docx_adapter.get_paragraphs(document.path)
+        )
 
     def get_tables(self, document_id: str) -> TableCollection:
-        document = self._require_document_type(document_id, expected="docx", operation="get_tables")
-        return TableCollection(document=document, tables=docx_adapter.get_tables(document.path))
+        document = self._require_document_type(
+            document_id, expected="docx", operation="get_tables"
+        )
+        return TableCollection(
+            document=document, tables=docx_adapter.get_tables(document.path)
+        )
 
     def get_block_bundle(self, document_id: str, block_index: int) -> BlockBundle:
-        document = self._require_document_type(document_id, expected="docx", operation="get_block_bundle")
-        return replace(docx_adapter.get_block_bundle(document.path, block_index), document=document)
+        document = self._require_document_type(
+            document_id, expected="docx", operation="get_block_bundle"
+        )
+        return replace(
+            docx_adapter.get_block_bundle(document.path, block_index), document=document
+        )
 
     def append_row(
         self,
@@ -1409,8 +1661,12 @@ class AppServices:
         record: dict[str, str] | None = None,
         output_mode: OutputMode = "versioned",
     ) -> StructuredWriteResult:
-        document = self._require_document_type(document_id, expected="xlsx", operation="append_row")
-        output_path = self._resolve_write_output_path(document.path, output_mode=output_mode)
+        document = self._require_document_type(
+            document_id, expected="xlsx", operation="append_row"
+        )
+        output_path = self._resolve_write_output_path(
+            document.path, output_mode=output_mode
+        )
         output_path, row_number, coordinates = xlsx_adapter.append_row(
             document.path,
             sheet_name,
@@ -1444,8 +1700,12 @@ class AppServices:
         column_mapping: dict[str, str] | None = None,
         output_mode: OutputMode = "versioned",
     ) -> StructuredWriteResult:
-        document = self._require_document_type(document_id, expected="xlsx", operation="write_table")
-        output_path = self._resolve_write_output_path(document.path, output_mode=output_mode)
+        document = self._require_document_type(
+            document_id, expected="xlsx", operation="write_table"
+        )
+        output_path = self._resolve_write_output_path(
+            document.path, output_mode=output_mode
+        )
         output_path, start_row, end_row = xlsx_adapter.write_table(
             document.path,
             sheet_name,
@@ -1479,8 +1739,12 @@ class AppServices:
         style_name: str | None = None,
         output_mode: OutputMode = "versioned",
     ) -> StructuredWriteResult:
-        document = self._require_document_type(document_id, expected="docx", operation="append_paragraph")
-        output_path = self._resolve_write_output_path(document.path, output_mode=output_mode)
+        document = self._require_document_type(
+            document_id, expected="docx", operation="append_paragraph"
+        )
+        output_path = self._resolve_write_output_path(
+            document.path, output_mode=output_mode
+        )
         output_path, block_index = docx_adapter.append_paragraph_block(
             document.path,
             text,
@@ -1498,7 +1762,9 @@ class AppServices:
                 metadata={
                     "block_index": block_index,
                     "block_type": bundle.block.block_type,
-                    "style_name": None if bundle.paragraph is None else bundle.paragraph.style_name,
+                    "style_name": None
+                    if bundle.paragraph is None
+                    else bundle.paragraph.style_name,
                 },
             ),
             summary=f"Appended paragraph block {block_index}.",
@@ -1512,8 +1778,12 @@ class AppServices:
         *,
         output_mode: OutputMode = "versioned",
     ) -> StructuredWriteResult:
-        document = self._require_document_type(document_id, expected="docx", operation="replace_block")
-        output_path = self._resolve_write_output_path(document.path, output_mode=output_mode)
+        document = self._require_document_type(
+            document_id, expected="docx", operation="replace_block"
+        )
+        output_path = self._resolve_write_output_path(
+            document.path, output_mode=output_mode
+        )
         output_path = docx_adapter.replace_block(
             document.path,
             block_index,
@@ -1562,7 +1832,9 @@ class AppServices:
                 with_embeddings=with_embeddings,
                 reporter=active_reporter,
             )
-            active_reporter.on_file_done(candidate, items_indexed=document_ref.item_count or 0)
+            active_reporter.on_file_done(
+                candidate, items_indexed=document_ref.item_count or 0
+            )
             indexed += 1
 
         active_reporter.on_index_done(files_indexed=indexed, files_skipped=skipped)
@@ -1587,7 +1859,9 @@ class AppServices:
         *,
         reporter: ProgressReporter | None = None,
     ) -> IndexSummary:
-        return self.reindex_path(self.resolve_document_path(document_id), reporter=reporter)
+        return self.reindex_path(
+            self.resolve_document_path(document_id), reporter=reporter
+        )
 
     def index_document(
         self,
@@ -1597,7 +1871,9 @@ class AppServices:
         reporter: ProgressReporter | None = None,
     ) -> DocumentRef:
         active_reporter = reporter or NullProgressReporter()
-        resolved_path, file_type = self._require_allowed_document_path(document_path, action="index")
+        resolved_path, file_type = self._require_allowed_document_path(
+            document_path, action="index"
+        )
         document_ref = _build_document_ref(resolved_path, file_type)
         items = _extract_items(resolved_path, file_type)
         document_ref = replace(document_ref, item_count=len(items))
@@ -1615,8 +1891,12 @@ class AppServices:
                     dimensions=provider.dimensions,
                 )
                 if file_type == "xlsx":
-                    row_embeddings = xlsx_adapter.build_row_embeddings(items, resolved_path)
-                    embedding_texts = [row_embedding.text for row_embedding in row_embeddings]
+                    row_embeddings = xlsx_adapter.build_row_embeddings(
+                        items, resolved_path
+                    )
+                    embedding_texts = [
+                        row_embedding.text for row_embedding in row_embeddings
+                    ]
                 else:
                     row_embeddings = []
                     embedding_texts = [
@@ -1629,7 +1909,9 @@ class AppServices:
                     len(embedding_texts),
                 )
                 if embedding_texts:
-                    active_reporter.on_embedding_start(resolved_path, len(embedding_texts))
+                    active_reporter.on_embedding_start(
+                        resolved_path, len(embedding_texts)
+                    )
                     started_at = time.perf_counter()
                     blobs = provider.embed_texts(
                         embedding_texts,
@@ -1662,7 +1944,12 @@ class AppServices:
                             model_name=provider.model_name,
                             dimensions=provider.dimensions,
                             embeddings=[
-                                (store.make_storage_id(document_ref.document_id, item.item_id), blob)
+                                (
+                                    store.make_storage_id(
+                                        document_ref.document_id, item.item_id
+                                    ),
+                                    blob,
+                                )
                                 for item, blob in zip(items, blobs, strict=True)
                             ],
                         )
@@ -1698,7 +1985,9 @@ class AppServices:
 
         resolved_document_path = None
         if document_path is not None:
-            resolved_document_path, _ = self._require_allowed_document_path(document_path, action="search")
+            resolved_document_path, _ = self._require_allowed_document_path(
+                document_path, action="search"
+            )
         connection = store.ensure_ready(self.config.index_path)
         try:
             if normalized_mode == "keyword":
@@ -1762,7 +2051,8 @@ class AppServices:
         return [
             hit
             for hit in hits
-            if hit.document_path is not None and self._is_allowed_document_path(hit.document_path)
+            if hit.document_path is not None
+            and self._is_allowed_document_path(hit.document_path)
         ]
 
     def locate_paragraph(self, document_path: Path, paragraph_index: int) -> ItemRef:
@@ -1774,10 +2064,16 @@ class AppServices:
         slide_number: int,
         shape_id: int | None = None,
     ) -> list[ItemRef]:
-        return self.locate_items(document_path, slide_number=slide_number, shape_id=shape_id)
+        return self.locate_items(
+            document_path, slide_number=slide_number, shape_id=shape_id
+        )
 
-    def locate_cell(self, document_path: Path, sheet_name: str, cell_coordinate: str) -> ItemRef:
-        return self.locate_items(document_path, sheet_name=sheet_name, cell_coordinate=cell_coordinate)[0]
+    def locate_cell(
+        self, document_path: Path, sheet_name: str, cell_coordinate: str
+    ) -> ItemRef:
+        return self.locate_items(
+            document_path, sheet_name=sheet_name, cell_coordinate=cell_coordinate
+        )[0]
 
     def locate_items(
         self,
@@ -1789,7 +2085,9 @@ class AppServices:
         sheet_name: str | None = None,
         cell_coordinate: str | None = None,
     ) -> list[ItemRef]:
-        resolved_path, file_type = self._require_allowed_document_path(document_path, action="locate")
+        resolved_path, file_type = self._require_allowed_document_path(
+            document_path, action="locate"
+        )
         connection = store.ensure_ready(self.config.index_path)
         try:
             document_row = self._resolve_document_row(connection, resolved_path)
@@ -1813,19 +2111,27 @@ class AppServices:
                 return [_item_ref_from_row(item_row)]
 
             if file_type == "pptx":
-                if paragraph_index is not None or sheet_name is not None or cell_coordinate is not None:
+                if (
+                    paragraph_index is not None
+                    or sheet_name is not None
+                    or cell_coordinate is not None
+                ):
                     raise InvalidArgumentsError(
                         "PPTX locate supports --slide and optional --shape only."
                     )
                 if slide_number is None:
                     raise InvalidArgumentsError("PPTX locate requires --slide.")
 
-                item_rows = store.fetch_items_for_document(connection, document_row["document_id"])
+                item_rows = store.fetch_items_for_document(
+                    connection, document_row["document_id"]
+                )
                 matches = [
                     row
                     for row in item_rows
                     if _metadata_value(row, "slide_number") == slide_number
-                    and (shape_id is None or _metadata_value(row, "shape_id") == shape_id)
+                    and (
+                        shape_id is None or _metadata_value(row, "shape_id") == shape_id
+                    )
                 ]
                 matches.sort(
                     key=lambda row: (
@@ -1843,8 +2149,14 @@ class AppServices:
                     )
                 return [_item_ref_from_row(row) for row in matches]
 
-            if paragraph_index is not None or slide_number is not None or shape_id is not None:
-                raise InvalidArgumentsError("XLSX locate supports --sheet and --cell only.")
+            if (
+                paragraph_index is not None
+                or slide_number is not None
+                or shape_id is not None
+            ):
+                raise InvalidArgumentsError(
+                    "XLSX locate supports --sheet and --cell only."
+                )
             if sheet_name is None or cell_coordinate is None:
                 raise InvalidArgumentsError("XLSX locate requires --sheet and --cell.")
 
@@ -1859,11 +2171,15 @@ class AppServices:
             connection.close()
 
     def read_item(self, document_path: Path, item_id: str) -> str:
-        resolved_path, file_type = self._require_allowed_document_path(document_path, action="read")
+        resolved_path, file_type = self._require_allowed_document_path(
+            document_path, action="read"
+        )
         connection = store.ensure_ready(self.config.index_path)
         try:
             document_row = self._resolve_document_row(connection, resolved_path)
-            self._resolve_indexed_item_row(connection, document_row, item_id, resolved_path)
+            self._resolve_indexed_item_row(
+                connection, document_row, item_id, resolved_path
+            )
         finally:
             connection.close()
         if file_type == "docx":
@@ -1880,9 +2196,13 @@ class AppServices:
         *,
         output_mode: OutputMode = "versioned",
     ) -> PatchResult:
-        resolved_path, file_type = self._require_allowed_document_path(document_path, action="write")
+        resolved_path, file_type = self._require_allowed_document_path(
+            document_path, action="write"
+        )
         if file_type == "xlsx":
-            raise InvalidArgumentsError("XLSX replace is not supported; use write-cell.")
+            raise InvalidArgumentsError(
+                "XLSX replace is not supported; use write-cell."
+            )
 
         self._prepare_write_target(
             resolved_path,
@@ -1890,13 +2210,19 @@ class AppServices:
             item_id,
             require_indexed_item=True,
         )
-        output_path = self._resolve_write_output_path(resolved_path, output_mode=output_mode)
+        output_path = self._resolve_write_output_path(
+            resolved_path, output_mode=output_mode
+        )
 
         if file_type == "docx":
-            output_path = docx_adapter.replace_paragraph(resolved_path, item_id, text, output_path)
+            output_path = docx_adapter.replace_paragraph(
+                resolved_path, item_id, text, output_path
+            )
             updated_text = docx_adapter.read_paragraph(output_path, item_id)
         else:
-            output_path = pptx_adapter.replace_text_shape(resolved_path, item_id, text, output_path)
+            output_path = pptx_adapter.replace_text_shape(
+                resolved_path, item_id, text, output_path
+            )
             updated_text = pptx_adapter.read_text_shape(output_path, item_id)
         self.index_document(output_path)
 
@@ -1927,23 +2253,33 @@ class AppServices:
         *,
         output_mode: OutputMode = "versioned",
     ) -> PatchResult:
-        resolved_path, file_type = self._require_allowed_document_path(document_path, action="write")
+        resolved_path, file_type = self._require_allowed_document_path(
+            document_path, action="write"
+        )
         self._prepare_write_target(
             resolved_path,
             file_type,
             item_id,
             require_indexed_item=file_type != "xlsx",
         )
-        output_path = self._resolve_write_output_path(resolved_path, output_mode=output_mode)
+        output_path = self._resolve_write_output_path(
+            resolved_path, output_mode=output_mode
+        )
 
         if file_type == "docx":
-            output_path = docx_adapter.append_paragraph(resolved_path, item_id, text, output_path)
+            output_path = docx_adapter.append_paragraph(
+                resolved_path, item_id, text, output_path
+            )
             updated_text = docx_adapter.read_paragraph(output_path, item_id)
         elif file_type == "pptx":
-            output_path = pptx_adapter.append_text_shape(resolved_path, item_id, text, output_path)
+            output_path = pptx_adapter.append_text_shape(
+                resolved_path, item_id, text, output_path
+            )
             updated_text = pptx_adapter.read_text_shape(output_path, item_id)
         else:
-            output_path = xlsx_adapter.append_cell(resolved_path, item_id, text, output_path)
+            output_path = xlsx_adapter.append_cell(
+                resolved_path, item_id, text, output_path
+            )
             updated_text = xlsx_adapter.read_cell(output_path, item_id)
         self.index_document(output_path)
 
@@ -1975,7 +2311,9 @@ class AppServices:
         *,
         output_mode: OutputMode = "versioned",
     ) -> PatchResult:
-        resolved_path, file_type = self._require_allowed_document_path(document_path, action="write")
+        resolved_path, file_type = self._require_allowed_document_path(
+            document_path, action="write"
+        )
         if file_type != "xlsx":
             raise InvalidArgumentsError("write-cell requires an .xlsx path.")
 
@@ -1986,8 +2324,12 @@ class AppServices:
             item_id,
             require_indexed_item=False,
         )
-        output_path = self._resolve_write_output_path(resolved_path, output_mode=output_mode)
-        output_path = xlsx_adapter.write_cell(resolved_path, item_id, value, output_path)
+        output_path = self._resolve_write_output_path(
+            resolved_path, output_mode=output_mode
+        )
+        output_path = xlsx_adapter.write_cell(
+            resolved_path, item_id, value, output_path
+        )
         updated_text = xlsx_adapter.read_cell(output_path, item_id)
         self.index_document(output_path)
 
@@ -2023,7 +2365,9 @@ class AppServices:
             document_row = self._resolve_document_row(connection, document_path)
             if require_indexed_item:
                 try:
-                    self._resolve_indexed_item_row(connection, document_row, item_id, document_path)
+                    self._resolve_indexed_item_row(
+                        connection, document_row, item_id, document_path
+                    )
                 except TargetNotFoundError:
                     if file_type == "pptx":
                         _raise_if_pptx_target_not_editable(document_path, item_id)
@@ -2044,11 +2388,15 @@ class AppServices:
         finally:
             connection.close()
 
-    def _ensure_object_locator_fresh(self, document: DocumentRef, locator: str | None) -> None:
+    def _ensure_object_locator_fresh(
+        self, document: DocumentRef, locator: str | None
+    ) -> None:
         current_hash = _content_hash(document.path)
         if document.content_hash is not None and document.content_hash != current_hash:
             subject = locator or document.path.as_posix()
-            raise StaleLocatorError(f"stale locator: {subject} is no longer valid for {document.path}")
+            raise StaleLocatorError(
+                f"stale locator: {subject} is no longer valid for {document.path}"
+            )
 
     def _finalize_object_mutation(
         self,
@@ -2078,7 +2426,9 @@ class AppServices:
         locator: str,
         exc: Exception,
     ) -> None:
-        if document.content_hash is not None and document.content_hash != _content_hash(document.path):
+        if document.content_hash is not None and document.content_hash != _content_hash(
+            document.path
+        ):
             raise StaleLocatorError(
                 f"stale locator: {locator} is no longer valid for {document.path}"
             ) from exc
@@ -2144,19 +2494,24 @@ class AppServices:
 
         if document.file_type == "pptx":
             if block_type == "slide":
-                _, locator = pptx_adapter.add_slide(document.path, output_path=output_path)
+                _, locator = pptx_adapter.add_slide(
+                    document.path, output_path=output_path
+                )
                 return locator
             if block_type == "textbox":
                 slide_locator = next(
                     (
                         value
                         for key, value in properties.items()
-                        if key in {"slide", "slide_locator", "locator"} and isinstance(value, str)
+                        if key in {"slide", "slide_locator", "locator"}
+                        and isinstance(value, str)
                     ),
                     None,
                 )
                 if slide_locator is None:
-                    raise InvalidArgumentsError("PPTX textbox blocks require a slide locator.")
+                    raise InvalidArgumentsError(
+                        "PPTX textbox blocks require a slide locator."
+                    )
                 _, locator = pptx_adapter.add_textbox(
                     document.path,
                     slide_locator,
@@ -2173,23 +2528,32 @@ class AppServices:
             if block_type == "sheet":
                 name = properties.get("name")
                 if not isinstance(name, str):
-                    raise InvalidArgumentsError("XLSX sheet blocks require a sheet name.")
-                _, locator = xlsx_adapter.add_sheet(document.path, name, output_path=output_path)
+                    raise InvalidArgumentsError(
+                        "XLSX sheet blocks require a sheet name."
+                    )
+                _, locator = xlsx_adapter.add_sheet(
+                    document.path, name, output_path=output_path
+                )
                 return locator
             if block_type == "row":
                 sheet_locator = next(
                     (
                         value
                         for key, value in properties.items()
-                        if key in {"sheet", "sheet_locator", "locator"} and isinstance(value, str)
+                        if key in {"sheet", "sheet_locator", "locator"}
+                        and isinstance(value, str)
                     ),
                     None,
                 )
                 if sheet_locator is None:
-                    raise InvalidArgumentsError("XLSX row blocks require a worksheet locator.")
+                    raise InvalidArgumentsError(
+                        "XLSX row blocks require a worksheet locator."
+                    )
                 values = properties.get("values")
                 if not isinstance(values, list):
-                    raise InvalidArgumentsError("XLSX row blocks require a values list.")
+                    raise InvalidArgumentsError(
+                        "XLSX row blocks require a values list."
+                    )
                 _, locator = xlsx_adapter.add_row(
                     document.path,
                     sheet_locator,
@@ -2202,12 +2566,15 @@ class AppServices:
                     (
                         value
                         for key, value in properties.items()
-                        if key in {"cell", "cell_locator", "locator"} and isinstance(value, str)
+                        if key in {"cell", "cell_locator", "locator"}
+                        and isinstance(value, str)
                     ),
                     None,
                 )
                 if cell_locator is None:
-                    raise InvalidArgumentsError("XLSX cell blocks require a cell locator.")
+                    raise InvalidArgumentsError(
+                        "XLSX cell blocks require a cell locator."
+                    )
                 xlsx_adapter.write_cell(
                     document.path,
                     to_legacy_locator(cell_locator, file_type="xlsx"),
@@ -2324,7 +2691,9 @@ class AppServices:
             model_name=provider.model_name,
             dimensions=provider.dimensions,
         )
-        query_vector = _unpack_embedding(provider.embed_texts([query])[0], provider.dimensions)
+        query_vector = _unpack_embedding(
+            provider.embed_texts([query])[0], provider.dimensions
+        )
 
         scored_hits: list[SearchHit] = []
         for row in item_rows:
@@ -2338,7 +2707,9 @@ class AppServices:
                 query_vector,
                 _unpack_embedding(row["embedding"], int(row["dimensions"])),
             )
-            scored_hits.append(_search_hit_from_xlsx_semantic_row(connection, row, similarity))
+            scored_hits.append(
+                _search_hit_from_xlsx_semantic_row(connection, row, similarity)
+            )
 
         scored_hits.sort(
             key=lambda hit: (
@@ -2358,9 +2729,11 @@ class AppServices:
     def _get_embedding_provider(self) -> embedding_provider.EmbeddingProvider:
         if self._embedding_provider is None:
             factory = self.embedding_provider_factory or (
-                lambda model_name, dimensions: embedding_provider.LocalEmbeddingProvider(
-                    model_name=model_name,
-                    dimensions=dimensions,
+                lambda model_name, dimensions: (
+                    embedding_provider.LocalEmbeddingProvider(
+                        model_name=model_name,
+                        dimensions=dimensions,
+                    )
                 )
             )
             self._embedding_provider = factory(
@@ -2379,7 +2752,9 @@ class AppServices:
         self._ensure_allowed_document_path(resolved_path, action=action)
         return resolved_path, file_type
 
-    def _ensure_allowed_document_path(self, document_path: Path, *, action: str) -> Path:
+    def _ensure_allowed_document_path(
+        self, document_path: Path, *, action: str
+    ) -> Path:
         resolved_path = canonicalize_existing_path(document_path)
         return ensure_path_allowed(
             resolved_path,
@@ -2420,9 +2795,13 @@ class AppServices:
         document_path: Path,
         item_id: str,
     ) -> tuple[sqlite3.Row, sqlite3.Row]:
-        resolved_path, _ = self._require_allowed_document_path(document_path, action="show")
+        resolved_path, _ = self._require_allowed_document_path(
+            document_path, action="show"
+        )
         document_row = self._resolve_document_row(connection, resolved_path)
-        item_row = self._resolve_indexed_item_row(connection, document_row, item_id, resolved_path)
+        item_row = self._resolve_indexed_item_row(
+            connection, document_row, item_id, resolved_path
+        )
         return document_row, item_row
 
     def _resolve_document_row(
@@ -2452,9 +2831,13 @@ class AppServices:
         item_id: str,
         document_path: Path,
     ) -> sqlite3.Row:
-        item_row = store.fetch_item_by_id(connection, document_row["document_id"], item_id)
+        item_row = store.fetch_item_by_id(
+            connection, document_row["document_id"], item_id
+        )
         if item_row is None:
-            raise TargetNotFoundError(f"Item {item_id} is not indexed for {document_path}")
+            raise TargetNotFoundError(
+                f"Item {item_id} is not indexed for {document_path}"
+            )
         return item_row
 
 
@@ -2473,7 +2856,9 @@ def discover_documents(roots: Iterable[Path]) -> list[DocumentRef]:
             if extension not in SUPPORTED_EXTENSIONS:
                 continue
 
-            documents.append(_build_document_ref(candidate, SUPPORTED_EXTENSIONS[extension]))
+            documents.append(
+                _build_document_ref(candidate, SUPPORTED_EXTENSIONS[extension])
+            )
 
     return documents
 
@@ -2511,7 +2896,8 @@ def _index_candidates(path: Path) -> list[Path]:
             [
                 candidate
                 for candidate in resolved.rglob("*")
-                if candidate.is_file() and candidate.suffix.lower() in SUPPORTED_EXTENSIONS
+                if candidate.is_file()
+                and candidate.suffix.lower() in SUPPORTED_EXTENSIONS
             ],
             key=lambda candidate: str(candidate),
         )
@@ -2574,7 +2960,9 @@ def _search_hit_from_xlsx_semantic_row(
     row: sqlite3.Row,
     similarity: float,
 ) -> SearchHit:
-    contributing_cells = store.fetch_xlsx_row_embedding_cells(connection, row["embedding_id"])
+    contributing_cells = store.fetch_xlsx_row_embedding_cells(
+        connection, row["embedding_id"]
+    )
     representative_coordinate = _metadata_value(row, "coordinate")
     return SearchHit(
         document_id=row["document_id"],
@@ -2592,8 +2980,7 @@ def _search_hit_from_xlsx_semantic_row(
             "matched_sheet": row["sheet_name"],
             "matched_row": int(row["row_number"]),
             "contributing_cell_coordinates": [
-                cell["cell_coordinate"]
-                for cell in contributing_cells
+                cell["cell_coordinate"] for cell in contributing_cells
             ],
             "representative_cell_coordinate": representative_coordinate,
             "resolved_from_row_embedding": True,
@@ -2659,7 +3046,9 @@ def _content_hash(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _build_embedding_text(item: IndexedItem, document_path: Path, *, file_type: FileType) -> str:
+def _build_embedding_text(
+    item: IndexedItem, document_path: Path, *, file_type: FileType
+) -> str:
     if file_type == "docx":
         return docx_adapter.build_embedding_text(item, document_path)
     if file_type == "pptx":
@@ -2686,8 +3075,7 @@ def _cosine_similarity(left: Sequence[float], right: Sequence[float]) -> float:
 
 def _rank_scores(storage_ids: Sequence[str]) -> dict[str, float]:
     return {
-        storage_id: 1.0 / rank
-        for rank, storage_id in enumerate(storage_ids, start=1)
+        storage_id: 1.0 / rank for rank, storage_id in enumerate(storage_ids, start=1)
     }
 
 
@@ -2701,8 +3089,7 @@ def _merge_hybrid_hits(
 ) -> list[SearchHit]:
     keyword_by_storage = {row["storage_id"]: row for row in keyword_rows}
     semantic_by_storage = {
-        f"{hit.document_id}:{hit.item_id}": hit
-        for hit in semantic_hits
+        f"{hit.document_id}:{hit.item_id}": hit for hit in semantic_hits
     }
     keyword_rank_scores = _rank_scores([row["storage_id"] for row in keyword_rows])
     semantic_rank_scores = _rank_scores(
@@ -2713,10 +3100,16 @@ def _merge_hybrid_hits(
     for storage_id in sorted(set(keyword_by_storage) | set(semantic_by_storage)):
         keyword_row = keyword_by_storage.get(storage_id)
         semantic_hit = semantic_by_storage.get(storage_id)
-        base_hit = semantic_hit if semantic_hit is not None else _search_hit_from_keyword_row(keyword_row)  # type: ignore[arg-type]
+        base_hit = (
+            semantic_hit
+            if semantic_hit is not None
+            else _search_hit_from_keyword_row(keyword_row)
+        )  # type: ignore[arg-type]
         keyword_score = keyword_rank_scores.get(storage_id, 0.0)
         semantic_score = semantic_rank_scores.get(storage_id, 0.0)
-        final_score = (keyword_weight * keyword_score) + (semantic_weight * semantic_score)
+        final_score = (keyword_weight * keyword_score) + (
+            semantic_weight * semantic_score
+        )
         merged.append(
             SearchHit(
                 document_id=base_hit.document_id,
@@ -2750,7 +3143,9 @@ def _merge_hybrid_hits(
     return merged[:limit]
 
 
-def _ensure_current_target_resolves(document_path: Path, file_type: FileType, item_id: str) -> None:
+def _ensure_current_target_resolves(
+    document_path: Path, file_type: FileType, item_id: str
+) -> None:
     if file_type == "docx":
         docx_adapter.read_paragraph(document_path, item_id)
         return
@@ -2775,7 +3170,12 @@ def _require_capability(
 
 def _primary_locator_for_batch(operations: Sequence[dict[str, Any]]) -> str | None:
     for operation in operations:
-        for key in ("locator", "parent_locator", "new_parent_locator", "target_parent_locator"):
+        for key in (
+            "locator",
+            "parent_locator",
+            "new_parent_locator",
+            "target_parent_locator",
+        ):
             value = operation.get(key)
             if isinstance(value, str) and value:
                 return value
@@ -2801,7 +3201,9 @@ def _validate_batch_operation(
 ) -> MutationResult:
     operation_name = _operation_name(operation)
     if operation_name == "create_object":
-        parent = _object_resolver(file_type).get_object(document_path, str(operation["parent_locator"]))
+        parent = _object_resolver(file_type).get_object(
+            document_path, str(operation["parent_locator"])
+        )
         _require_capability(parent.capabilities, Capability.ADD_CHILD, parent.locator)
         _validate_create_operation(file_type, operation)
         return MutationResult(
@@ -2828,8 +3230,12 @@ def _validate_batch_operation(
         text_range = _coerce_visible_text_range(operation.get("range"))
         if text_range is not None:
             raise InvalidArgumentsError("update_object does not accept range.")
-        if segments is not None and any(key in dict(operation.get("properties", {})) for key in {"text", "value"}):
-            raise InvalidArgumentsError("update_object accepts either properties.text/value or segments, not both.")
+        if segments is not None and any(
+            key in dict(operation.get("properties", {})) for key in {"text", "value"}
+        ):
+            raise InvalidArgumentsError(
+                "update_object accepts either properties.text/value or segments, not both."
+            )
     return MutationResult(
         document_path=document_path,
         output_path=None,
@@ -2990,7 +3396,11 @@ def _create_object_on_path(
         return (
             locator,
             f"Created {object_type} under {parent_locator}.",
-            {"text": text, "segments": None if segments is None else len(segments), "style_name": style},
+            {
+                "text": text,
+                "segments": None if segments is None else len(segments),
+                "style_name": style,
+            },
         )
 
     if file_type == "pptx" and object_type in {"text_shape", "textbox"}:
@@ -3000,7 +3410,9 @@ def _create_object_on_path(
         width = _optional_int(properties.get("width"))
         height = _optional_int(properties.get("height"))
         if None in {left, top, width, height}:
-            raise InvalidArgumentsError("PPTX text_shape creation requires left, top, width, and height.")
+            raise InvalidArgumentsError(
+                "PPTX text_shape creation requires left, top, width, and height."
+            )
         target_path, locator = pptx_adapter.add_textbox(
             document_path,
             parent_locator,
@@ -3025,9 +3437,13 @@ def _create_object_on_path(
         )
 
     if file_type == "xlsx" and object_type == "cell":
-        parts = parse_locator(to_v2_locator(parent_locator, file_type="xlsx")).components
+        parts = parse_locator(
+            to_v2_locator(parent_locator, file_type="xlsx")
+        ).components
         if len(parts) != 3 or parts[:2] != ("xlsx", "sheet"):
-            raise InvalidArgumentsError("XLSX cell creation requires a worksheet parent locator.")
+            raise InvalidArgumentsError(
+                "XLSX cell creation requires a worksheet parent locator."
+            )
         coordinate = properties.get("coordinate")
         if not isinstance(coordinate, str) or not coordinate.strip():
             raise InvalidArgumentsError("XLSX cell creation requires a coordinate.")
@@ -3042,7 +3458,12 @@ def _create_object_on_path(
             text = "".join(fragment.text for fragment in segments)
         else:
             text = _required_string_property(properties, ("value", "text"), object_type)
-            xlsx_adapter.write_node(document_path, to_legacy_locator(locator, file_type="xlsx"), text, output_path)
+            xlsx_adapter.write_node(
+                document_path,
+                to_legacy_locator(locator, file_type="xlsx"),
+                text,
+                output_path,
+            )
             target_path = output_path
         return (
             locator,
@@ -3050,7 +3471,9 @@ def _create_object_on_path(
             {"value": text, "segments": None if segments is None else len(segments)},
         )
 
-    raise InvalidArgumentsError(f"create_object is not supported for {file_type} {object_type}.")
+    raise InvalidArgumentsError(
+        f"create_object is not supported for {file_type} {object_type}."
+    )
 
 
 def _update_object_on_path(
@@ -3066,9 +3489,13 @@ def _update_object_on_path(
     payload = _object_resolver(file_type).get_object(document_path, locator)
     _require_capability(payload.capabilities, Capability.UPDATE, locator)
     if text_range is not None:
-        raise InvalidArgumentsError("update_object does not support range; use style_inline for partial formatting.")
+        raise InvalidArgumentsError(
+            "update_object does not support range; use style_inline for partial formatting."
+        )
     if segments is not None and any(key in properties for key in {"text", "value"}):
-        raise InvalidArgumentsError("update_object accepts either properties.text/value or segments, not both.")
+        raise InvalidArgumentsError(
+            "update_object accepts either properties.text/value or segments, not both."
+        )
 
     if file_type == "docx" and segments is not None:
         _, _, snapshot = docx_adapter.rewrite_paragraph_fragments(
@@ -3077,7 +3504,10 @@ def _update_object_on_path(
             segments,
             output_path=output_path,
         )
-        return (f"Updated {payload.object_type} {locator}.", {"text": snapshot.text, "segments": len(snapshot.fragments)})
+        return (
+            f"Updated {payload.object_type} {locator}.",
+            {"text": snapshot.text, "segments": len(snapshot.fragments)},
+        )
 
     if file_type == "pptx" and segments is not None:
         _, rewritten_locator, snapshot = pptx_adapter.rewrite_paragraph_fragments(
@@ -3098,10 +3528,15 @@ def _update_object_on_path(
             segments,
             output_path=output_path,
         )
-        return (f"Updated {payload.object_type} {locator}.", {"value": snapshot.text, "segments": len(snapshot.fragments)})
+        return (
+            f"Updated {payload.object_type} {locator}.",
+            {"value": snapshot.text, "segments": len(snapshot.fragments)},
+        )
 
     if file_type in {"docx", "pptx"}:
-        content = _required_string_property(properties, ("text", "value"), payload.object_type)
+        content = _required_string_property(
+            properties, ("text", "value"), payload.object_type
+        )
         legacy_locator = to_legacy_locator(locator, file_type=file_type)
         if file_type == "docx":
             docx_adapter.write_node(document_path, legacy_locator, content, output_path)
@@ -3109,7 +3544,9 @@ def _update_object_on_path(
             pptx_adapter.write_node(document_path, legacy_locator, content, output_path)
         return (f"Updated {payload.object_type} {locator}.", {"text": content})
 
-    content = _required_string_property(properties, ("value", "text"), payload.object_type)
+    content = _required_string_property(
+        properties, ("value", "text"), payload.object_type
+    )
     legacy_locator = to_legacy_locator(locator, file_type="xlsx")
     xlsx_adapter.write_node(document_path, legacy_locator, content, output_path)
     return (f"Updated {payload.object_type} {locator}.", {"value": content})
@@ -3128,9 +3565,13 @@ def _move_object_on_path(
     _require_capability(payload.capabilities, Capability.MOVE, locator)
 
     if file_type != "pptx" or payload.object_type != "slide":
-        raise InvalidArgumentsError(f"move_object is not supported for {payload.object_type}.")
+        raise InvalidArgumentsError(
+            f"move_object is not supported for {payload.object_type}."
+        )
     if new_parent_locator != "pptx:presentation":
-        raise InvalidArgumentsError("PPTX slides can only be moved within the presentation root.")
+        raise InvalidArgumentsError(
+            "PPTX slides can only be moved within the presentation root."
+        )
 
     slide_number = _pptx_slide_number(locator)
     new_position = _required_position(position)
@@ -3155,12 +3596,18 @@ def _copy_object_on_path(
     _require_capability(payload.capabilities, Capability.COPY, locator)
 
     if file_type != "pptx" or payload.object_type != "slide":
-        raise InvalidArgumentsError(f"copy_object is not supported for {payload.object_type}.")
+        raise InvalidArgumentsError(
+            f"copy_object is not supported for {payload.object_type}."
+        )
     if target_parent_locator != "pptx:presentation":
-        raise InvalidArgumentsError("PPTX slides can only be copied within the presentation root.")
+        raise InvalidArgumentsError(
+            "PPTX slides can only be copied within the presentation root."
+        )
 
     slide_number = _pptx_slide_number(locator)
-    copied_position = _copy_pptx_slide(document_path, slide_number, position, output_path)
+    copied_position = _copy_pptx_slide(
+        document_path, slide_number, position, output_path
+    )
     return (
         f"pptx:slide:{copied_position}",
         f"Copied slide {slide_number} to position {copied_position}.",
@@ -3193,7 +3640,9 @@ def _validate_create_operation(file_type: FileType, operation: dict[str, Any]) -
     if text_range is not None:
         raise InvalidArgumentsError("create_object does not accept range.")
     if segments is not None and any(key in properties for key in {"text", "value"}):
-        raise InvalidArgumentsError("create_object accepts either text/value or segments, not both.")
+        raise InvalidArgumentsError(
+            "create_object accepts either text/value or segments, not both."
+        )
     if file_type == "docx" and object_type == "paragraph":
         _text_or_segments_text(properties, object_type, segments, keys=("text",))
         _docx_after_locator(operation.get("position"))
@@ -3202,7 +3651,9 @@ def _validate_create_operation(file_type: FileType, operation: dict[str, Any]) -
         _text_or_segments_text(properties, object_type, segments, keys=("text",))
         for key in ("left", "top", "width", "height"):
             if _optional_int(properties.get(key)) is None:
-                raise InvalidArgumentsError("PPTX text_shape creation requires left, top, width, and height.")
+                raise InvalidArgumentsError(
+                    "PPTX text_shape creation requires left, top, width, and height."
+                )
         return
     if file_type == "xlsx" and object_type == "cell":
         coordinate = properties.get("coordinate")
@@ -3211,7 +3662,9 @@ def _validate_create_operation(file_type: FileType, operation: dict[str, Any]) -
         if segments is None:
             _required_string_property(properties, ("value", "text"), object_type)
         return
-    raise InvalidArgumentsError(f"create_object does not support {file_type} {object_type}.")
+    raise InvalidArgumentsError(
+        f"create_object does not support {file_type} {object_type}."
+    )
 
 
 def _operation_name(operation: dict[str, Any]) -> str:
@@ -3236,7 +3689,9 @@ def _required_string_property(
         if value is None:
             continue
         return str(value)
-    raise InvalidArgumentsError(f"{object_type} updates require one of: {', '.join(keys)}.")
+    raise InvalidArgumentsError(
+        f"{object_type} updates require one of: {', '.join(keys)}."
+    )
 
 
 def _text_or_segments_text(
@@ -3277,7 +3732,9 @@ def _coerce_inline_fragments(
                 raise InvalidArgumentsError("segment styles must be objects.")
             fragment = InlineFragment(text=text, style=style)
         else:
-            raise InvalidArgumentsError("segments must contain inline-fragment objects.")
+            raise InvalidArgumentsError(
+                "segments must contain inline-fragment objects."
+            )
         if not fragment.text:
             raise InvalidArgumentsError("segments must contain non-empty text.")
         fragments.append(fragment)
@@ -3297,11 +3754,17 @@ def _coerce_visible_text_range(
         try:
             result = VisibleTextRange(start=int(value["start"]), end=int(value["end"]))
         except (KeyError, TypeError, ValueError) as exc:
-            raise InvalidArgumentsError("range must contain integer start and end offsets.") from exc
+            raise InvalidArgumentsError(
+                "range must contain integer start and end offsets."
+            ) from exc
     else:
-        raise InvalidArgumentsError("range must be an object with start and end offsets.")
+        raise InvalidArgumentsError(
+            "range must be an object with start and end offsets."
+        )
     if result.start < 0 or result.end <= result.start:
-        raise InvalidArgumentsError("range must use non-negative offsets with end > start.")
+        raise InvalidArgumentsError(
+            "range must use non-negative offsets with end > start."
+        )
     return result
 
 
@@ -3346,7 +3809,9 @@ def _move_pptx_slide(
     presentation = pptx_adapter._open_presentation(document_path)
     slide_count = len(presentation.slides)
     if slide_number < 1 or slide_number > slide_count:
-        raise TargetNotFoundError(f"Slide {slide_number} does not exist in the presentation.")
+        raise TargetNotFoundError(
+            f"Slide {slide_number} does not exist in the presentation."
+        )
     if new_position < 1 or new_position > slide_count:
         raise InvalidArgumentsError(f"Invalid target slide position: {new_position}")
 
@@ -3371,13 +3836,17 @@ def _copy_pptx_slide(
         placeholder_shape.element.getparent().remove(placeholder_shape.element)
 
     for shape in source_slide.shapes:
-        new_slide.shapes._spTree.insert_element_before(deepcopy(shape.element), "p:extLst")
+        new_slide.shapes._spTree.insert_element_before(
+            deepcopy(shape.element), "p:extLst"
+        )
 
     for rel in source_slide.part.rels.values():
         if rel.reltype.endswith("/notesSlide") or rel.reltype.endswith("/slideLayout"):
             continue
         if rel.is_external:
-            new_rid = new_slide.part.relate_to(rel.target_ref, rel.reltype, is_external=True)
+            new_rid = new_slide.part.relate_to(
+                rel.target_ref, rel.reltype, is_external=True
+            )
         else:
             new_rid = new_slide.part.relate_to(rel.target_part, rel.reltype)
         _retarget_shape_relationships(new_slide, rel.rId, new_rid)
@@ -3388,13 +3857,17 @@ def _copy_pptx_slide(
         if source_notes is not None and target_notes is not None:
             target_notes.text = source_notes.text
 
-    copied_position = len(presentation.slides) if position is None else _required_position(position)
+    copied_position = (
+        len(presentation.slides) if position is None else _required_position(position)
+    )
     _move_pptx_slide_in_memory(presentation, len(presentation.slides), copied_position)
     presentation.save(output_path)
     return copied_position
 
 
-def _move_pptx_slide_in_memory(presentation, slide_number: int, new_position: int) -> None:
+def _move_pptx_slide_in_memory(
+    presentation, slide_number: int, new_position: int
+) -> None:
     slide_count = len(presentation.slides)
     if new_position < 1 or new_position > slide_count:
         raise InvalidArgumentsError(f"Invalid target slide position: {new_position}")
@@ -3420,7 +3893,9 @@ def _delete_docx_object(
     canonical = to_v2_locator(locator, file_type="docx")
     if canonical.startswith("docx:para:"):
         document = docx_adapter._open_document(document_path)
-        paragraph = docx_adapter._resolve_paragraph(document, to_legacy_locator(canonical, file_type="docx"))
+        paragraph = docx_adapter._resolve_paragraph(
+            document, to_legacy_locator(canonical, file_type="docx")
+        )
         paragraph._element.getparent().remove(paragraph._element)
         document.save(output_path)
         return (f"Deleted paragraph {locator}.", {"locator": locator})
@@ -3428,7 +3903,9 @@ def _delete_docx_object(
         document = docx_adapter._open_document(document_path)
         parts = canonical.split(":")
         table_index = int(parts[2])
-        resolved = docx_adapter._resolve_locator(document, f"table:{table_index}:cell:0:0")
+        resolved = docx_adapter._resolve_locator(
+            document, f"table:{table_index}:cell:0:0"
+        )
         resolved.table._element.getparent().remove(resolved.table._element)
         document.save(output_path)
         return (f"Deleted table {locator}.", {"locator": locator})
@@ -3453,11 +3930,15 @@ def _delete_pptx_object(
         return (f"Deleted slide {locator}.", {"locator": locator})
 
     if len(parts) == 5 and parts[:2] == ["pptx", "slide"]:
-        slide = pptx_adapter._resolve_slide(presentation, int(parts[2]))
-        shape = pptx_adapter._resolve_shape(presentation, to_legacy_locator(canonical, file_type="pptx"))
+        shape = pptx_adapter._resolve_shape(
+            presentation, to_legacy_locator(canonical, file_type="pptx")
+        )
         shape.element.getparent().remove(shape.element)
         presentation.save(output_path)
-        return (f"Deleted {parts[3]} {locator}.", {"locator": locator, "slide_number": int(parts[2])})
+        return (
+            f"Deleted {parts[3]} {locator}.",
+            {"locator": locator, "slide_number": int(parts[2])},
+        )
 
     raise InvalidArgumentsError(f"delete_object is not supported for {locator}.")
 
@@ -3601,7 +4082,9 @@ def _check_fts5_support() -> DoctorCheck:
     connection = sqlite3.connect(":memory:")
     try:
         if store.supports_fts5(connection):
-            return DoctorCheck("SQLite FTS5", True, "FTS5 virtual tables are available.")
+            return DoctorCheck(
+                "SQLite FTS5", True, "FTS5 virtual tables are available."
+            )
         return DoctorCheck("SQLite FTS5", False, "FTS5 virtual tables are unavailable.")
     finally:
         connection.close()
@@ -3619,13 +4102,16 @@ def _check_embedding_model(
     model_name: str,
     dimensions: int,
     *,
-    provider_factory: Callable[[str, int | None], embedding_provider.EmbeddingProvider] | None = None,
+    provider_factory: Callable[[str, int | None], embedding_provider.EmbeddingProvider]
+    | None = None,
 ) -> DoctorCheck:
     try:
         factory = provider_factory or (
-            lambda selected_model, selected_dimensions: embedding_provider.LocalEmbeddingProvider(
-                model_name=selected_model,
-                dimensions=selected_dimensions,
+            lambda selected_model, selected_dimensions: (
+                embedding_provider.LocalEmbeddingProvider(
+                    model_name=selected_model,
+                    dimensions=selected_dimensions,
+                )
             )
         )
         provider = factory(model_name, dimensions)
@@ -3638,7 +4124,9 @@ def _check_embedding_model(
     )
 
 
-def _check_embedding_store(index_path: Path, model_name: str, dimensions: int) -> DoctorCheck:
+def _check_embedding_store(
+    index_path: Path, model_name: str, dimensions: int
+) -> DoctorCheck:
     try:
         connection = store.ensure_ready(index_path)
     except (OSError, sqlite3.Error, store.StoreCapabilityError) as exc:
@@ -3647,7 +4135,9 @@ def _check_embedding_store(index_path: Path, model_name: str, dimensions: int) -
     try:
         meta = store.fetch_embedding_meta(connection)
         if not meta:
-            return DoctorCheck("Embedding Store", True, "Embedding sidecar tables are ready.")
+            return DoctorCheck(
+                "Embedding Store", True, "Embedding sidecar tables are ready."
+            )
         store.ensure_embedding_meta(
             connection,
             model_name=model_name,
@@ -3657,7 +4147,9 @@ def _check_embedding_store(index_path: Path, model_name: str, dimensions: int) -
         return DoctorCheck("Embedding Store", False, f"Metadata check failed: {exc}")
     finally:
         connection.close()
-    return DoctorCheck("Embedding Store", True, "Embedding tables and metadata are consistent.")
+    return DoctorCheck(
+        "Embedding Store", True, "Embedding tables and metadata are consistent."
+    )
 
 
 def _check_index_path(index_path: Path) -> DoctorCheck:
@@ -3677,26 +4169,42 @@ def _check_document_roots(roots: Sequence[Path]) -> list[DoctorCheck]:
     checks: list[DoctorCheck] = []
     for root in roots:
         if root.exists() and root.is_dir() and os.access(root, os.R_OK):
-            checks.append(DoctorCheck(f"Document Root {root}", True, "Readable directory."))
+            checks.append(
+                DoctorCheck(f"Document Root {root}", True, "Readable directory.")
+            )
         elif not root.exists():
-            checks.append(DoctorCheck(f"Document Root {root}", False, "Path does not exist."))
+            checks.append(
+                DoctorCheck(f"Document Root {root}", False, "Path does not exist.")
+            )
         elif not root.is_dir():
-            checks.append(DoctorCheck(f"Document Root {root}", False, "Path is not a directory."))
+            checks.append(
+                DoctorCheck(f"Document Root {root}", False, "Path is not a directory.")
+            )
         else:
-            checks.append(DoctorCheck(f"Document Root {root}", False, "Directory is not readable."))
+            checks.append(
+                DoctorCheck(
+                    f"Document Root {root}", False, "Directory is not readable."
+                )
+            )
     return checks
 
 
 def _check_allowed_roots(roots: Sequence[Path]) -> list[DoctorCheck]:
     if not roots:
-        return [DoctorCheck("Allowed Roots", True, "No allowed-root policy configured.")]
-    return _check_resolved_roots("Allowed Root", normalize_roots(roots), require_writable=False)
+        return [
+            DoctorCheck("Allowed Roots", True, "No allowed-root policy configured.")
+        ]
+    return _check_resolved_roots(
+        "Allowed Root", normalize_roots(roots), require_writable=False
+    )
 
 
 def _check_output_roots(roots: Sequence[Path]) -> list[DoctorCheck]:
     if not roots:
         return [DoctorCheck("Output Roots", True, "No output-root policy configured.")]
-    return _check_resolved_roots("Output Root", normalize_roots(roots), require_writable=True)
+    return _check_resolved_roots(
+        "Output Root", normalize_roots(roots), require_writable=True
+    )
 
 
 def _check_resolved_roots(
@@ -3709,22 +4217,34 @@ def _check_resolved_roots(
     for root in roots:
         if root.exists():
             if not root.is_dir():
-                checks.append(DoctorCheck(f"{label} {root}", False, "Path is not a directory."))
+                checks.append(
+                    DoctorCheck(f"{label} {root}", False, "Path is not a directory.")
+                )
                 continue
             if require_writable and not os.access(root, os.W_OK):
-                checks.append(DoctorCheck(f"{label} {root}", False, "Directory is not writable."))
+                checks.append(
+                    DoctorCheck(f"{label} {root}", False, "Directory is not writable.")
+                )
                 continue
             if not require_writable and not os.access(root, os.R_OK):
-                checks.append(DoctorCheck(f"{label} {root}", False, "Directory is not readable."))
+                checks.append(
+                    DoctorCheck(f"{label} {root}", False, "Directory is not readable.")
+                )
                 continue
-            checks.append(DoctorCheck(f"{label} {root}", True, "Policy root is usable."))
+            checks.append(
+                DoctorCheck(f"{label} {root}", True, "Policy root is usable.")
+            )
             continue
 
         existing_parent = _nearest_existing_parent(root)
         access_mode = os.W_OK if require_writable else os.R_OK
         if existing_parent is not None and os.access(existing_parent, access_mode):
             checks.append(
-                DoctorCheck(f"{label} {root}", True, f"Parent path {existing_parent} is accessible.")
+                DoctorCheck(
+                    f"{label} {root}",
+                    True,
+                    f"Parent path {existing_parent} is accessible.",
+                )
             )
             continue
         checks.append(

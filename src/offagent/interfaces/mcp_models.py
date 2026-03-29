@@ -14,8 +14,6 @@ from offagent.domain.models import (
     DocxTableCell,
     DocxTableEntry,
     DocxTablesResult,
-    DocxParagraph,
-    DocxTable,
     DocumentRef,
     FileType,
     InlineFragment,
@@ -26,16 +24,12 @@ from offagent.domain.models import (
     NodePayload,
     NodeWriteResult,
     ObjectPayload,
-    ParagraphCollection,
     PptxTextBlockNode,
     SearchHit,
     SearchMode,
     SectionPayload,
     StructureCollection,
     StructureSection,
-    StructuredTarget,
-    StructuredWriteResult,
-    TableCollection,
     VisibleTextRange,
     XlsxInsertRowsResult,
     XlsxSectionCell,
@@ -189,7 +183,9 @@ class RefreshDocumentResult(MCPModel):
     files_skipped: int
 
     @classmethod
-    def from_refresh(cls, document: DocumentRef, summary: IndexSummary) -> "RefreshDocumentResult":
+    def from_refresh(
+        cls, document: DocumentRef, summary: IndexSummary
+    ) -> "RefreshDocumentResult":
         return cls(
             document=DocumentModel.from_document_ref(document),
             files_scanned=summary.files_scanned,
@@ -203,7 +199,11 @@ class ListDocumentsResult(MCPModel):
 
     @classmethod
     def from_documents(cls, documents: list[DocumentRef]) -> "ListDocumentsResult":
-        return cls(documents=[DocumentModel.from_document_ref(document) for document in documents])
+        return cls(
+            documents=[
+                DocumentModel.from_document_ref(document) for document in documents
+            ]
+        )
 
 
 class SearchDocumentsResult(MCPModel):
@@ -281,7 +281,9 @@ class CreateObjectRequest(MCPModel):
         if self.range is not None:
             raise ValueError("create_object does not accept range.")
         if self.segments and any(key in self.properties for key in {"text", "value"}):
-            raise ValueError("create_object accepts either properties.text/value or segments, not both.")
+            raise ValueError(
+                "create_object accepts either properties.text/value or segments, not both."
+            )
         return self
 
 
@@ -298,7 +300,9 @@ class UpdateObjectRequest(MCPModel):
         if self.range is not None:
             raise ValueError("update_object does not accept range.")
         if self.segments and any(key in self.properties for key in {"text", "value"}):
-            raise ValueError("update_object accepts either properties.text/value or segments, not both.")
+            raise ValueError(
+                "update_object accepts either properties.text/value or segments, not both."
+            )
         return self
 
 
@@ -596,7 +600,10 @@ class GetStructureResult(MCPModel):
     def from_domain(cls, result: StructureCollection) -> "GetStructureResult":
         return cls(
             document=DocumentModel.from_document_ref(result.document),
-            sections=[StructureSectionModel.from_domain(section) for section in result.sections],
+            sections=[
+                StructureSectionModel.from_domain(section)
+                for section in result.sections
+            ],
         )
 
 
@@ -688,10 +695,15 @@ class GetSectionResult(MCPModel):
             is_heading=result.is_heading,
             runs=[DocxRunModel.from_domain(run) for run in result.runs],
             rows=[list(row) for row in result.rows],
-            table_cells=[DocxTableCellModel.from_domain(cell) for cell in result.table_cells],
+            table_cells=[
+                DocxTableCellModel.from_domain(cell) for cell in result.table_cells
+            ],
             slide_number=result.slide_number,
             notes_text=result.notes_text,
-            text_blocks=[PptxTextBlockNodeModel.from_domain(block) for block in result.text_blocks],
+            text_blocks=[
+                PptxTextBlockNodeModel.from_domain(block)
+                for block in result.text_blocks
+            ],
             sheet_name=result.sheet_name,
             cells=[XlsxSectionCellModel.from_domain(cell) for cell in result.cells],
         )
@@ -736,7 +748,9 @@ class GetObjectResult(MCPModel):
             properties=result.properties,
             capabilities=[capability.value for capability in result.capabilities],
             parent_locator=result.parent_locator,
-            child_summary=[ChildSummaryModel.from_domain(child) for child in result.child_summary],
+            child_summary=[
+                ChildSummaryModel.from_domain(child) for child in result.child_summary
+            ],
             metadata=result.metadata,
         )
 
@@ -817,7 +831,9 @@ class XlsxInsertRowsResultModel(MCPModel):
         )
 
     @classmethod
-    def from_mutation_result(cls, result: MutationResult) -> "XlsxInsertRowsResultModel":
+    def from_mutation_result(
+        cls, result: MutationResult
+    ) -> "XlsxInsertRowsResultModel":
         return cls(
             document_id=result.document_id,
             output_path="" if result.output_path is None else str(result.output_path),
@@ -869,7 +885,10 @@ class BatchResultModel(MCPModel):
             output_path=None if result.output_path is None else str(result.output_path),
             summary=result.summary,
             dry_run=result.dry_run,
-            operations=[MutationResultModel.from_domain(operation) for operation in result.operations],
+            operations=[
+                MutationResultModel.from_domain(operation)
+                for operation in result.operations
+            ],
             metadata=result.metadata,
         )
 

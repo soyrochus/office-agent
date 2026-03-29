@@ -23,7 +23,6 @@ from offagent.interfaces.mcp_models import (
     CreateDocumentRequest,
     CreateObjectRequest,
     DeleteObjectRequest,
-    BlockStyleModel,
     DocxAddTableRequest,
     DocxGetTablesResult,
     DocxInsertPageBreakRequest,
@@ -73,7 +72,9 @@ from offagent.interfaces.mcp_models import (
 try:
     from mcp.server.fastmcp import FastMCP
     from mcp.server.fastmcp.exceptions import ToolError
-except ModuleNotFoundError:  # pragma: no cover - exercised when MCP dependency is absent
+except (
+    ModuleNotFoundError
+):  # pragma: no cover - exercised when MCP dependency is absent
     FastMCP = None
     ToolError = None
 
@@ -121,7 +122,9 @@ def build_mcp_server(config: AppConfig):
             for raw_path in request.paths:
                 path = Path(raw_path).expanduser()
                 summary = services.index_path(path)
-                results.append(IndexPathResult.from_index_summary(path.resolve(), summary))
+                results.append(
+                    IndexPathResult.from_index_summary(path.resolve(), summary)
+                )
             return IndexDocumentsResult.from_results(results)
 
         return _run_tool(runner)
@@ -139,9 +142,13 @@ def build_mcp_server(config: AppConfig):
 
     @mcp.tool(description="List indexed documents known to Office Agent.")
     def list_documents() -> ListDocumentsResult:
-        return _run_tool(lambda: ListDocumentsResult.from_documents(services.list_documents()))
+        return _run_tool(
+            lambda: ListDocumentsResult.from_documents(services.list_documents())
+        )
 
-    @mcp.tool(description="Deprecated alias for `search_objects` that preserves the pre-V2 response shape.")
+    @mcp.tool(
+        description="Deprecated alias for `search_objects` that preserves the pre-V2 response shape."
+    )
     def search_documents(
         query: str,
         file_type: str | None = None,
@@ -174,7 +181,9 @@ def build_mcp_server(config: AppConfig):
 
         return _run_tool(runner)
 
-    @mcp.tool(description="Return the top-level structure for an indexed Office document.")
+    @mcp.tool(
+        description="Return the top-level structure for an indexed Office document."
+    )
     def get_structure(document_id: str) -> GetStructureResult:
         request = SemanticDocumentRequest.model_validate({"document_id": document_id})
         return _run_tool(
@@ -183,7 +192,9 @@ def build_mcp_server(config: AppConfig):
             )
         )
 
-    @mcp.tool(description="Return the full structured payload for one document section.")
+    @mcp.tool(
+        description="Return the full structured payload for one document section."
+    )
     def get_section(
         document_id: str,
         section_id: str,
@@ -208,14 +219,18 @@ def build_mcp_server(config: AppConfig):
 
     @mcp.tool(description="Read the current content for a single node locator.")
     def get_node(document_id: str, node_id: str) -> GetNodeResult:
-        request = NodeRequest.model_validate({"document_id": document_id, "node_id": node_id})
+        request = NodeRequest.model_validate(
+            {"document_id": document_id, "node_id": node_id}
+        )
         return _run_tool(
             lambda: mcp_converters.convert_get_node(
                 services.get_node(request.document_id, request.node_id)
             )
         )
 
-    @mcp.tool(description="Replace content at a single node locator and re-index the output document.")
+    @mcp.tool(
+        description="Replace content at a single node locator and re-index the output document."
+    )
     def write_node(
         document_id: str,
         node_id: str,
@@ -241,7 +256,9 @@ def build_mcp_server(config: AppConfig):
             )
         )
 
-    @mcp.tool(description="Insert a new DOCX paragraph, optionally after an existing locator.")
+    @mcp.tool(
+        description="Insert a new DOCX paragraph, optionally after an existing locator."
+    )
     def insert_content(
         document_id: str,
         content: str,
@@ -270,7 +287,9 @@ def build_mcp_server(config: AppConfig):
             )
         )
 
-    @mcp.tool(description="Create a new empty DOCX, PPTX, or XLSX document and index it immediately.")
+    @mcp.tool(
+        description="Create a new empty DOCX, PPTX, or XLSX document and index it immediately."
+    )
     def create_document(
         format: str,
         output_path: str,
@@ -296,7 +315,9 @@ def build_mcp_server(config: AppConfig):
             )
         )
 
-    @mcp.tool(description="Add a format-specific content block to an existing Office document.")
+    @mcp.tool(
+        description="Add a format-specific content block to an existing Office document."
+    )
     def add_content_block(
         document_id: str,
         block_type: str,
@@ -322,7 +343,9 @@ def build_mcp_server(config: AppConfig):
             )
         )
 
-    @mcp.tool(description="Apply inline font styling to a DOCX run, PPTX text run, or XLSX cell.")
+    @mcp.tool(
+        description="Apply inline font styling to a DOCX run, PPTX text run, or XLSX cell."
+    )
     def style_inline(
         document_id: str,
         locator: str,
@@ -348,13 +371,17 @@ def build_mcp_server(config: AppConfig):
                     request.locator,
                     request.style.to_domain(),
                     request.clear_fields,
-                    text_range=None if request.range is None else request.range.to_domain(),
+                    text_range=None
+                    if request.range is None
+                    else request.range.to_domain(),
                     output_mode=request.output_mode,
                 )
             )
         )
 
-    @mcp.tool(description="Apply block-level styling to a DOCX paragraph, PPTX paragraph, or XLSX cell.")
+    @mcp.tool(
+        description="Apply block-level styling to a DOCX paragraph, PPTX paragraph, or XLSX cell."
+    )
     def style_block(
         document_id: str,
         locator: str,
@@ -383,7 +410,9 @@ def build_mcp_server(config: AppConfig):
             )
         )
 
-    @mcp.tool(description="Apply a DOCX structural role using standard Word paragraph styles.")
+    @mcp.tool(
+        description="Apply a DOCX structural role using standard Word paragraph styles."
+    )
     def set_structural_role(
         document_id: str,
         locator: str,
@@ -412,7 +441,9 @@ def build_mcp_server(config: AppConfig):
             )
         )
 
-    @mcp.tool(description="Return all DOCX tables with locators that can be passed to get_section.")
+    @mcp.tool(
+        description="Return all DOCX tables with locators that can be passed to get_section."
+    )
     def docx_get_tables(document_id: str) -> DocxGetTablesResult:
         request = SemanticDocumentRequest.model_validate({"document_id": document_id})
         return _run_tool(
@@ -430,7 +461,9 @@ def build_mcp_server(config: AppConfig):
 def _register_v2_tools(mcp, services: AppServices) -> None:
     @mcp.tool(description="Return a structured V2 object payload for a typed locator.")
     def get_object(document_id: str, locator: str) -> GetObjectResult:
-        request = GetObjectRequest.model_validate({"document_id": document_id, "locator": locator})
+        request = GetObjectRequest.model_validate(
+            {"document_id": document_id, "locator": locator}
+        )
         return _run_tool(
             lambda: mcp_converters.convert_get_object(
                 services.get_object(request.document_id, request.locator)
@@ -494,7 +527,9 @@ def _register_v2_tools(mcp, services: AppServices) -> None:
                     request.object_type,
                     request.properties,
                     request.position,
-                    None if request.segments is None else [fragment.to_domain() for fragment in request.segments],
+                    None
+                    if request.segments is None
+                    else [fragment.to_domain() for fragment in request.segments],
                     None if request.range is None else request.range.to_domain(),
                     output_mode=request.output_mode,
                 )
@@ -526,7 +561,9 @@ def _register_v2_tools(mcp, services: AppServices) -> None:
                     request.document_id,
                     request.locator,
                     request.properties,
-                    None if request.segments is None else [fragment.to_domain() for fragment in request.segments],
+                    None
+                    if request.segments is None
+                    else [fragment.to_domain() for fragment in request.segments],
                     None if request.range is None else request.range.to_domain(),
                     output_mode=request.output_mode,
                 )
@@ -591,7 +628,9 @@ def _register_v2_tools(mcp, services: AppServices) -> None:
             )
         )
 
-    @mcp.tool(description="Apply a sequence of V2 object operations atomically to a single document.")
+    @mcp.tool(
+        description="Apply a sequence of V2 object operations atomically to a single document."
+    )
     def batch_edit(
         document_id: str,
         operations: list[dict],
@@ -617,7 +656,9 @@ def _register_v2_tools(mcp, services: AppServices) -> None:
             )
         )
 
-    @mcp.tool(description="Delete a V2 object when the locator advertises delete capability.")
+    @mcp.tool(
+        description="Delete a V2 object when the locator advertises delete capability."
+    )
     def delete_object(
         document_id: str,
         locator: str,
@@ -640,7 +681,9 @@ def _register_v2_tools(mcp, services: AppServices) -> None:
             )
         )
 
-    @mcp.tool(description="Search indexed Office document content and return V2 object locators.")
+    @mcp.tool(
+        description="Search indexed Office document content and return V2 object locators."
+    )
     def search_objects(
         query: str,
         file_type: str | None = None,
@@ -675,7 +718,9 @@ def _register_v2_tools(mcp, services: AppServices) -> None:
 
 
 def _register_escape_hatch_tools(mcp, services: AppServices) -> None:
-    @mcp.tool(description="Apply a named DOCX paragraph style after validating the document style catalog.")
+    @mcp.tool(
+        description="Apply a named DOCX paragraph style after validating the document style catalog."
+    )
     def docx_set_paragraph_style(
         document_id: str,
         locator: str,
@@ -724,7 +769,9 @@ def _register_escape_hatch_tools(mcp, services: AppServices) -> None:
             )
         )
 
-    @mcp.tool(description="Insert a DOCX table with optional widths, style, and after-position.")
+    @mcp.tool(
+        description="Insert a DOCX table with optional widths, style, and after-position."
+    )
     def docx_add_table(
         document_id: str,
         row_count: int,
@@ -785,7 +832,9 @@ def _register_escape_hatch_tools(mcp, services: AppServices) -> None:
             )
         )
 
-    @mcp.tool(description="Add a new PPTX slide using a validated layout index or layout name.")
+    @mcp.tool(
+        description="Add a new PPTX slide using a validated layout index or layout name."
+    )
     def pptx_add_slide(
         document_id: str,
         layout_index: int | None = None,
@@ -866,7 +915,9 @@ def _register_escape_hatch_tools(mcp, services: AppServices) -> None:
             )
         )
 
-    @mcp.tool(description="Add a text box shape to a PPTX slide at the provided position and size.")
+    @mcp.tool(
+        description="Add a text box shape to a PPTX slide at the provided position and size."
+    )
     def pptx_add_text_shape(
         document_id: str,
         locator: str,
@@ -960,8 +1011,16 @@ def _register_escape_hatch_tools(mcp, services: AppServices) -> None:
         )
 
         def runner() -> XlsxInsertRowsResultModel:
-            if request.locator is not None or request.row_number is not None or request.count is not None:
-                if request.locator is None or request.row_number is None or request.count is None:
+            if (
+                request.locator is not None
+                or request.row_number is not None
+                or request.count is not None
+            ):
+                if (
+                    request.locator is None
+                    or request.row_number is None
+                    or request.count is None
+                ):
                     raise InvalidArgumentsError(
                         "xlsx_insert_rows requires locator, row_number, and count for row insertion mode."
                     )

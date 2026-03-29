@@ -40,7 +40,13 @@ class PptxObjectResolver:
             return _build_slide_payload(document_path, presentation, target)
         if target.object_type == "notes":
             return _build_notes_payload(document_path, presentation, target)
-        if target.object_type in {"shape", "text_shape", "image_shape", "table", "group_shape"}:
+        if target.object_type in {
+            "shape",
+            "text_shape",
+            "image_shape",
+            "table",
+            "group_shape",
+        }:
             return _build_shape_payload(document_path, presentation, target)
         if target.object_type == "paragraph":
             return _build_paragraph_payload(document_path, presentation, target)
@@ -83,7 +89,9 @@ class PptxObjectResolver:
             return list(children[:limit])
         return list(children)
 
-    def resolve_capabilities(self, document_path: Path, locator: str) -> frozenset[Capability]:
+    def resolve_capabilities(
+        self, document_path: Path, locator: str
+    ) -> frozenset[Capability]:
         del document_path
         canonical = to_v2_locator(locator, file_type="pptx")
         target = _parse_pptx_target(canonical)
@@ -98,14 +106,19 @@ def add_slide(
     output_path: Path,
 ) -> tuple[str, str, dict[str, Any]]:
     presentation = pptx_adapter._open_presentation(document_path)
-    layout = _resolve_slide_layout(presentation, layout_index=layout_index, layout_name=layout_name)
+    layout = _resolve_slide_layout(
+        presentation, layout_index=layout_index, layout_name=layout_name
+    )
     presentation.slides.add_slide(layout)
     slide_number = len(presentation.slides)
     presentation.save(output_path)
     return (
         f"pptx:slide:{slide_number}",
         f"Added slide {slide_number} using layout {layout.name!r}.",
-        {"layout_name": layout.name, "layout_index": _layout_index(presentation, layout)},
+        {
+            "layout_name": layout.name,
+            "layout_index": _layout_index(presentation, layout),
+        },
     )
 
 
@@ -122,7 +135,9 @@ def duplicate_slide(
         raise InvalidArgumentsError("pptx_duplicate_slide requires a slide locator.")
 
     presentation = pptx_adapter._open_presentation(document_path)
-    copied_position = _duplicate_slide_in_presentation(presentation, target.slide_number, position)
+    copied_position = _duplicate_slide_in_presentation(
+        presentation, target.slide_number, position
+    )
     presentation.save(output_path)
     return (
         f"pptx:slide:{copied_position}",
@@ -149,11 +164,11 @@ def set_slide_layout(
 
     presentation = pptx_adapter._open_presentation(document_path)
     slide = _resolve_slide(presentation, target)
-    layout = _resolve_slide_layout(presentation, layout_index=layout_index, layout_name=layout_name)
+    layout = _resolve_slide_layout(
+        presentation, layout_index=layout_index, layout_name=layout_name
+    )
     old_layout_rids = [
-        r_id
-        for r_id, rel in slide.part.rels.items()
-        if rel.reltype == RT.SLIDE_LAYOUT
+        r_id for r_id, rel in slide.part.rels.items() if rel.reltype == RT.SLIDE_LAYOUT
     ]
     for r_id in old_layout_rids:
         slide.part.drop_rel(r_id)
@@ -162,7 +177,10 @@ def set_slide_layout(
     return (
         canonical,
         f"Updated {canonical} to layout {layout.name!r}.",
-        {"layout_name": layout.name, "layout_index": _layout_index(presentation, layout)},
+        {
+            "layout_name": layout.name,
+            "layout_index": _layout_index(presentation, layout),
+        },
     )
 
 
@@ -211,7 +229,9 @@ def _build_presentation_payload(document_path: Path, presentation) -> ObjectPayl
     )
 
 
-def _build_slide_payload(document_path: Path, presentation, target: _PptxTarget) -> ObjectPayload:
+def _build_slide_payload(
+    document_path: Path, presentation, target: _PptxTarget
+) -> ObjectPayload:
     slide = _resolve_slide(presentation, target)
     bundle = pptx_adapter.get_slide_bundle(document_path, target.slide_number)
     layout_name = getattr(getattr(slide, "slide_layout", None), "name", None)
@@ -233,7 +253,9 @@ def _build_slide_payload(document_path: Path, presentation, target: _PptxTarget)
     )
 
 
-def _build_notes_payload(document_path: Path, presentation, target: _PptxTarget) -> ObjectPayload:
+def _build_notes_payload(
+    document_path: Path, presentation, target: _PptxTarget
+) -> ObjectPayload:
     slide = _resolve_slide(presentation, target)
     notes_text = pptx_adapter._notes_text(slide)
     return ObjectPayload(
@@ -247,7 +269,9 @@ def _build_notes_payload(document_path: Path, presentation, target: _PptxTarget)
     )
 
 
-def _build_shape_payload(document_path: Path, presentation, target: _PptxTarget) -> ObjectPayload:
+def _build_shape_payload(
+    document_path: Path, presentation, target: _PptxTarget
+) -> ObjectPayload:
     resolved = _resolve_shape_target(presentation, target)
     shape = resolved["shape"]
     actual_object_type = _shape_object_type(shape)
@@ -261,7 +285,11 @@ def _build_shape_payload(document_path: Path, presentation, target: _PptxTarget)
         "shape_id": resolved["shape_id"],
         "shape_index": resolved["shape_index"],
         "shape_name": getattr(shape, "name", None),
-        "shape_type": getattr(getattr(shape, "shape_type", None), "name", str(getattr(shape, "shape_type", ""))),
+        "shape_type": getattr(
+            getattr(shape, "shape_type", None),
+            "name",
+            str(getattr(shape, "shape_type", "")),
+        ),
         "left": int(getattr(shape, "left", 0)),
         "top": int(getattr(shape, "top", 0)),
         "width": int(getattr(shape, "width", 0)),
@@ -275,21 +303,32 @@ def _build_shape_payload(document_path: Path, presentation, target: _PptxTarget)
         table = shape.table
         properties["row_count"] = len(table.rows)
         properties["column_count"] = len(table.columns)
-        child_summary = _table_children(presentation, _PptxTarget(target.canonical_locator, "table", target.slide_number, target.shape_id))
+        child_summary = _table_children(
+            presentation,
+            _PptxTarget(
+                target.canonical_locator, "table", target.slide_number, target.shape_id
+            ),
+        )
 
     return ObjectPayload(
         document=pptx_adapter._document_ref(document_path),
         locator=target.canonical_locator,
-        object_type=actual_object_type if target.object_type == "shape" else target.object_type,
+        object_type=actual_object_type
+        if target.object_type == "shape"
+        else target.object_type,
         preview=_shape_preview(shape),
         properties=properties,
-        capabilities=_capability_tuple(actual_object_type if target.object_type == "shape" else target.object_type),
+        capabilities=_capability_tuple(
+            actual_object_type if target.object_type == "shape" else target.object_type
+        ),
         parent_locator=f"pptx:slide:{resolved['slide_number']}",
         child_summary=child_summary,
     )
 
 
-def _build_paragraph_payload(document_path: Path, presentation, target: _PptxTarget) -> ObjectPayload:
+def _build_paragraph_payload(
+    document_path: Path, presentation, target: _PptxTarget
+) -> ObjectPayload:
     resolved = _resolve_paragraph_target(presentation, target)
     paragraph = resolved["paragraph"]
     return ObjectPayload(
@@ -310,7 +349,9 @@ def _build_paragraph_payload(document_path: Path, presentation, target: _PptxTar
     )
 
 
-def _build_run_payload(document_path: Path, presentation, target: _PptxTarget) -> ObjectPayload:
+def _build_run_payload(
+    document_path: Path, presentation, target: _PptxTarget
+) -> ObjectPayload:
     resolved = _resolve_run_target(presentation, target)
     run = resolved["run"]
     return ObjectPayload(
@@ -330,7 +371,9 @@ def _build_run_payload(document_path: Path, presentation, target: _PptxTarget) -
     )
 
 
-def _build_table_row_payload(document_path: Path, presentation, target: _PptxTarget) -> ObjectPayload:
+def _build_table_row_payload(
+    document_path: Path, presentation, target: _PptxTarget
+) -> ObjectPayload:
     resolved = _resolve_table_row_target(presentation, target)
     return ObjectPayload(
         document=pptx_adapter._document_ref(document_path),
@@ -349,7 +392,9 @@ def _build_table_row_payload(document_path: Path, presentation, target: _PptxTar
     )
 
 
-def _build_table_cell_payload(document_path: Path, presentation, target: _PptxTarget) -> ObjectPayload:
+def _build_table_cell_payload(
+    document_path: Path, presentation, target: _PptxTarget
+) -> ObjectPayload:
     resolved = _resolve_table_cell_target(presentation, target)
     cell = resolved["cell"]
     return ObjectPayload(
@@ -369,7 +414,9 @@ def _build_table_cell_payload(document_path: Path, presentation, target: _PptxTa
     )
 
 
-def _presentation_children(presentation, *, child_type: str | None = None) -> tuple[ChildSummary, ...]:
+def _presentation_children(
+    presentation, *, child_type: str | None = None
+) -> tuple[ChildSummary, ...]:
     if child_type not in {None, "", "slide"}:
         return ()
     return tuple(
@@ -383,7 +430,9 @@ def _presentation_children(presentation, *, child_type: str | None = None) -> tu
     )
 
 
-def _slide_children(presentation, target: _PptxTarget, *, child_type: str | None = None) -> tuple[ChildSummary, ...]:
+def _slide_children(
+    presentation, target: _PptxTarget, *, child_type: str | None = None
+) -> tuple[ChildSummary, ...]:
     slide = _resolve_slide(presentation, target)
     normalized_child_type = child_type or None
     children: list[ChildSummary] = []
@@ -413,7 +462,9 @@ def _slide_children(presentation, target: _PptxTarget, *, child_type: str | None
     return tuple(children)
 
 
-def _text_shape_children(presentation, target: _PptxTarget, *, child_type: str | None = None) -> tuple[ChildSummary, ...]:
+def _text_shape_children(
+    presentation, target: _PptxTarget, *, child_type: str | None = None
+) -> tuple[ChildSummary, ...]:
     if child_type not in {None, "", "paragraph"}:
         return ()
     resolved = _resolve_shape_target(presentation, target)
@@ -431,7 +482,9 @@ def _text_shape_children(presentation, target: _PptxTarget, *, child_type: str |
     )
 
 
-def _paragraph_children(presentation, target: _PptxTarget, *, child_type: str | None = None) -> tuple[ChildSummary, ...]:
+def _paragraph_children(
+    presentation, target: _PptxTarget, *, child_type: str | None = None
+) -> tuple[ChildSummary, ...]:
     if child_type not in {None, "", "run"}:
         return ()
     resolved = _resolve_paragraph_target(presentation, target)
@@ -448,10 +501,16 @@ def _paragraph_children(presentation, target: _PptxTarget, *, child_type: str | 
     )
 
 
-def _table_children(presentation, target: _PptxTarget, *, child_type: str | None = None) -> tuple[ChildSummary, ...]:
+def _table_children(
+    presentation, target: _PptxTarget, *, child_type: str | None = None
+) -> tuple[ChildSummary, ...]:
     resolved = _resolve_shape_target(presentation, target)
     shape = resolved["shape"]
-    if not getattr(shape, "has_table", False) or child_type not in {None, "", "table_row"}:
+    if not getattr(shape, "has_table", False) or child_type not in {
+        None,
+        "",
+        "table_row",
+    }:
         return ()
     return tuple(
         ChildSummary(
@@ -464,7 +523,9 @@ def _table_children(presentation, target: _PptxTarget, *, child_type: str | None
     )
 
 
-def _table_row_children(presentation, target: _PptxTarget, *, child_type: str | None = None) -> tuple[ChildSummary, ...]:
+def _table_row_children(
+    presentation, target: _PptxTarget, *, child_type: str | None = None
+) -> tuple[ChildSummary, ...]:
     resolved = _resolve_table_row_target(presentation, target)
     if child_type not in {None, "", "table_cell"}:
         return ()
@@ -497,7 +558,9 @@ def _resolve_shape_target(presentation, target: _PptxTarget) -> dict[str, Any]:
                 "shape_index": shape_index,
                 "shape": shape,
             }
-    raise TargetNotFoundError(f"Shape {target.shape_id} does not exist on slide {target.slide_number}.")
+    raise TargetNotFoundError(
+        f"Shape {target.shape_id} does not exist on slide {target.slide_number}."
+    )
 
 
 def _resolve_paragraph_target(presentation, target: _PptxTarget) -> dict[str, Any]:
@@ -512,7 +575,11 @@ def _resolve_paragraph_target(presentation, target: _PptxTarget) -> dict[str, An
         raise TargetNotFoundError(
             f"Paragraph {target.paragraph_index} does not exist in shape {resolved['shape_id']}."
         ) from exc
-    return {**resolved, "paragraph_index": target.paragraph_index, "paragraph": paragraph}
+    return {
+        **resolved,
+        "paragraph_index": target.paragraph_index,
+        "paragraph": paragraph,
+    }
 
 
 def _resolve_run_target(presentation, target: _PptxTarget) -> dict[str, Any]:
@@ -589,14 +656,20 @@ def _slide_preview(slide) -> str:
     return next((block.text[:120] for block in text_blocks if block.text), "")
 
 
-def _resolve_slide_layout(presentation, *, layout_index: int | None, layout_name: str | None):
+def _resolve_slide_layout(
+    presentation, *, layout_index: int | None, layout_name: str | None
+):
     layouts = tuple(presentation.slide_layouts)
     if (layout_index is None) == (layout_name is None):
-        raise InvalidArgumentsError("Specify exactly one of layout_index or layout_name.")
+        raise InvalidArgumentsError(
+            "Specify exactly one of layout_index or layout_name."
+        )
 
     if layout_index is not None:
         if layout_index < 0 or layout_index >= len(layouts):
-            raise InvalidArgumentsError(f"Unknown PPTX slide layout index: {layout_index}")
+            raise InvalidArgumentsError(
+                f"Unknown PPTX slide layout index: {layout_index}"
+            )
         return layouts[layout_index]
 
     assert layout_name is not None
@@ -613,7 +686,9 @@ def _layout_index(presentation, layout) -> int:
     raise RuntimeError("Failed to resolve PPTX slide layout index.")
 
 
-def _duplicate_slide_in_presentation(presentation, slide_number: int | None, position: int | None) -> int:
+def _duplicate_slide_in_presentation(
+    presentation, slide_number: int | None, position: int | None
+) -> int:
     if slide_number is None:
         raise InvalidArgumentsError("pptx_duplicate_slide requires a slide locator.")
 
@@ -624,13 +699,17 @@ def _duplicate_slide_in_presentation(presentation, slide_number: int | None, pos
         placeholder_shape.element.getparent().remove(placeholder_shape.element)
 
     for shape in source_slide.shapes:
-        new_slide.shapes._spTree.insert_element_before(deepcopy(shape.element), "p:extLst")
+        new_slide.shapes._spTree.insert_element_before(
+            deepcopy(shape.element), "p:extLst"
+        )
 
     for rel in source_slide.part.rels.values():
         if rel.reltype.endswith("/notesSlide") or rel.reltype.endswith("/slideLayout"):
             continue
         if rel.is_external:
-            new_rid = new_slide.part.relate_to(rel.target_ref, rel.reltype, is_external=True)
+            new_rid = new_slide.part.relate_to(
+                rel.target_ref, rel.reltype, is_external=True
+            )
         else:
             new_rid = new_slide.part.relate_to(rel.target_part, rel.reltype)
         _retarget_shape_relationships(new_slide, rel.rId, new_rid)
@@ -670,9 +749,17 @@ def _parse_pptx_target(locator: str) -> _PptxTarget:
     if components == ("pptx", "presentation"):
         return _PptxTarget(locator, "presentation")
     if len(components) == 3 and components[:2] == ("pptx", "slide"):
-        return _PptxTarget(locator, "slide", slide_number=_require_index(components[2], locator))
-    if len(components) == 4 and components[:2] == ("pptx", "slide") and components[3] == "notes":
-        return _PptxTarget(locator, "notes", slide_number=_require_index(components[2], locator))
+        return _PptxTarget(
+            locator, "slide", slide_number=_require_index(components[2], locator)
+        )
+    if (
+        len(components) == 4
+        and components[:2] == ("pptx", "slide")
+        and components[3] == "notes"
+    ):
+        return _PptxTarget(
+            locator, "notes", slide_number=_require_index(components[2], locator)
+        )
     if len(components) == 5 and components[:2] == ("pptx", "slide"):
         return _PptxTarget(
             locator,
@@ -708,7 +795,12 @@ def _parse_pptx_target(locator: str) -> _PptxTarget:
             paragraph_index=_require_index(components[6], locator),
             run_index=_require_index(components[8], locator),
         )
-    if len(components) == 7 and components[:2] == ("pptx", "slide") and components[3] == "table" and components[5] == "row":
+    if (
+        len(components) == 7
+        and components[:2] == ("pptx", "slide")
+        and components[3] == "table"
+        and components[5] == "row"
+    ):
         return _PptxTarget(
             locator,
             "table_row",
@@ -751,7 +843,15 @@ def _capabilities_for(object_type: str) -> frozenset[Capability]:
     if object_type == "notes":
         return frozenset({Capability.READ, Capability.UPDATE})
     if object_type in {"shape", "text_shape", "image_shape", "group_shape"}:
-        return frozenset({Capability.READ, Capability.UPDATE, Capability.DELETE, Capability.MOVE, Capability.COPY})
+        return frozenset(
+            {
+                Capability.READ,
+                Capability.UPDATE,
+                Capability.DELETE,
+                Capability.MOVE,
+                Capability.COPY,
+            }
+        )
     if object_type == "paragraph":
         return frozenset({Capability.READ, Capability.UPDATE, Capability.STYLE})
     if object_type == "run":
@@ -768,14 +868,24 @@ def _capabilities_for(object_type: str) -> frozenset[Capability]:
             }
         )
     if object_type == "table_row":
-        return frozenset({Capability.READ, Capability.UPDATE, Capability.DELETE, Capability.MOVE, Capability.COPY})
+        return frozenset(
+            {
+                Capability.READ,
+                Capability.UPDATE,
+                Capability.DELETE,
+                Capability.MOVE,
+                Capability.COPY,
+            }
+        )
     if object_type == "table_cell":
         return frozenset({Capability.READ, Capability.UPDATE, Capability.STYLE})
     return frozenset({Capability.READ})
 
 
 def _capability_tuple(object_type: str) -> tuple[Capability, ...]:
-    return tuple(sorted(_capabilities_for(object_type), key=lambda capability: capability.value))
+    return tuple(
+        sorted(_capabilities_for(object_type), key=lambda capability: capability.value)
+    )
 
 
 def _require_index(raw: str, locator: str) -> int:

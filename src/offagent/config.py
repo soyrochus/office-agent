@@ -94,7 +94,9 @@ def load_config(
         values["output_roots"] = _split_paths(env_values[ENV_OUTPUT_ROOTS])
 
     if ENV_ALLOW_INPLACE_OVERWRITE in env_values:
-        values["allow_inplace_overwrite"] = _parse_bool(env_values[ENV_ALLOW_INPLACE_OVERWRITE])
+        values["allow_inplace_overwrite"] = _parse_bool(
+            env_values[ENV_ALLOW_INPLACE_OVERWRITE]
+        )
 
     if ENV_EMBEDDING_MODEL in env_values:
         values["embedding_model"] = env_values[ENV_EMBEDDING_MODEL]
@@ -134,8 +136,12 @@ def load_config(
 
     return AppConfig(
         index_path=Path(values["index_path"]).expanduser(),
-        document_roots=tuple(Path(root).expanduser() for root in values["document_roots"]),
-        allowed_roots=tuple(Path(root).expanduser() for root in values["allowed_roots"]),
+        document_roots=tuple(
+            Path(root).expanduser() for root in values["document_roots"]
+        ),
+        allowed_roots=tuple(
+            Path(root).expanduser() for root in values["allowed_roots"]
+        ),
         output_directory=output_directory,
         output_roots=output_roots,
         allow_inplace_overwrite=bool(values["allow_inplace_overwrite"]),
@@ -148,7 +154,9 @@ def load_config(
     )
 
 
-def _select_config_path(config_path: Path | None, env: Mapping[str, str]) -> Path | None:
+def _select_config_path(
+    config_path: Path | None, env: Mapping[str, str]
+) -> Path | None:
     if config_path is not None:
         selected = config_path.expanduser()
         if not selected.exists():
@@ -237,7 +245,9 @@ def _parse_int(value: str, name: str, *, minimum: int | None = None) -> int:
     try:
         parsed = int(value)
     except ValueError as exc:
-        raise InvalidArgumentsError(f"Invalid integer value for {name}: {value}") from exc
+        raise InvalidArgumentsError(
+            f"Invalid integer value for {name}: {value}"
+        ) from exc
     if minimum is not None and parsed < minimum:
         raise InvalidArgumentsError(f"{name} must be >= {minimum}")
     return parsed

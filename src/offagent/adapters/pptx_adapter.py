@@ -24,7 +24,10 @@ from offagent.domain.text_fragments import (
     fragment_text,
     normalize_fragments,
 )
-from offagent.errors import InvalidArgumentsError, TargetNotEditableError as BaseTargetNotEditableError
+from offagent.errors import (
+    InvalidArgumentsError,
+    TargetNotEditableError as BaseTargetNotEditableError,
+)
 from offagent.errors import TargetNotFoundError
 
 try:
@@ -96,7 +99,9 @@ def read_text_shape(document_path: Path, item_id: str) -> str:
     return resolved.text
 
 
-def replace_text_shape(document_path: Path, item_id: str, text: str, output_path: Path | None = None) -> Path:
+def replace_text_shape(
+    document_path: Path, item_id: str, text: str, output_path: Path | None = None
+) -> Path:
     presentation = _open_presentation(document_path)
     shape = _resolve_shape(presentation, item_id)
     text_frame = _require_text_frame(shape)
@@ -107,7 +112,9 @@ def replace_text_shape(document_path: Path, item_id: str, text: str, output_path
     return target_path
 
 
-def append_text_shape(document_path: Path, item_id: str, text: str, output_path: Path | None = None) -> Path:
+def append_text_shape(
+    document_path: Path, item_id: str, text: str, output_path: Path | None = None
+) -> Path:
     presentation = _open_presentation(document_path)
     shape = _resolve_shape(presentation, item_id)
     text_frame = _require_text_frame(shape)
@@ -169,7 +176,9 @@ def get_section(document_path: Path, locator: str) -> SectionPayload:
     bundle = get_slide_bundle(document_path, slide_number)
     return SectionPayload(
         document=bundle.document,
-        locator=locator if locator.startswith("slide:") else make_slide_locator(slide_number),
+        locator=locator
+        if locator.startswith("slide:")
+        else make_slide_locator(slide_number),
         section_type="slide",
         preview=bundle.preview,
         metadata=bundle.metadata,
@@ -220,17 +229,23 @@ def read_node(document_path: Path, locator: str) -> tuple[str, str, dict[str, ob
     )
 
 
-def write_node(document_path: Path, locator: str, text: str, output_path: Path | None = None) -> Path:
+def write_node(
+    document_path: Path, locator: str, text: str, output_path: Path | None = None
+) -> Path:
     normalized = locator.strip()
     if normalized.startswith("slide:") and ":shape:" not in normalized:
-        shape_locator = _first_text_shape_locator(document_path, _slide_number_from_locator(normalized))
+        shape_locator = _first_text_shape_locator(
+            document_path, _slide_number_from_locator(normalized)
+        )
         if shape_locator is None:
             raise TargetNotEditableError("slide has no editable text shapes")
         return replace_text_shape(document_path, shape_locator, text, output_path)
     return replace_text_shape(document_path, normalized, text, output_path)
 
 
-def get_presentation_structure(document_path: Path) -> tuple[PresentationSlideSummary, ...]:
+def get_presentation_structure(
+    document_path: Path,
+) -> tuple[PresentationSlideSummary, ...]:
     presentation = _open_presentation(document_path)
     slides: list[PresentationSlideSummary] = []
 
@@ -306,14 +321,18 @@ def add_textbox(
     presentation = _open_presentation(document_path)
     slide_number = _slide_number_from_any_locator(slide_locator)
     slide = _resolve_slide(presentation, slide_number)
-    resolved_left, resolved_top, resolved_width, resolved_height = _default_textbox_geometry(
-        presentation,
-        left=left,
-        top=top,
-        width=width,
-        height=height,
+    resolved_left, resolved_top, resolved_width, resolved_height = (
+        _default_textbox_geometry(
+            presentation,
+            left=left,
+            top=top,
+            width=width,
+            height=height,
+        )
     )
-    shape = slide.shapes.add_textbox(resolved_left, resolved_top, resolved_width, resolved_height)
+    shape = slide.shapes.add_textbox(
+        resolved_left, resolved_top, resolved_width, resolved_height
+    )
     shape.text_frame.text = text
     locator = f"pptx:slide:{slide_number}:shape:{shape.shape_id}"
     target_path = _target_path(document_path, output_path)
@@ -321,7 +340,9 @@ def add_textbox(
     return target_path, locator
 
 
-def read_paragraph_fragments(document_path: Path, locator: str) -> TextContainerSnapshot:
+def read_paragraph_fragments(
+    document_path: Path, locator: str
+) -> TextContainerSnapshot:
     presentation = _open_presentation(document_path)
     target = _resolve_paragraph_container(presentation, locator)
     fragments = _read_pptx_paragraph_fragments(target["paragraph"])
@@ -377,7 +398,11 @@ def style_run(
     skipped_fields = _apply_pptx_inline_style(target["run"], style, clear_set)
     target_path = _target_path(document_path, output_path)
     presentation.save(target_path)
-    return target_path, target["shape_locator"], {"cleared_fields": clear_set, "skipped_fields": skipped_fields}
+    return (
+        target_path,
+        target["shape_locator"],
+        {"cleared_fields": clear_set, "skipped_fields": skipped_fields},
+    )
 
 
 def style_paragraph_range(
@@ -390,18 +415,24 @@ def style_paragraph_range(
 ) -> tuple[Path, str, dict[str, object]]:
     snapshot = read_paragraph_fragments(document_path, locator)
     clear_set = _normalize_clear_fields(clear_fields, _INLINE_STYLE_FIELDS)
-    styled = apply_style_to_range(snapshot.fragments, text_range, style=style, clear_fields=clear_set)
+    styled = apply_style_to_range(
+        snapshot.fragments, text_range, style=style, clear_fields=clear_set
+    )
     target_path, paragraph_locator, rewritten = rewrite_paragraph_fragments(
         document_path,
         locator,
         styled,
         output_path=output_path,
     )
-    return target_path, paragraph_locator, {
-        "cleared_fields": clear_set,
-        "range": {"start": text_range.start, "end": text_range.end},
-        "text": rewritten.text,
-    }
+    return (
+        target_path,
+        paragraph_locator,
+        {
+            "cleared_fields": clear_set,
+            "range": {"start": text_range.start, "end": text_range.end},
+            "text": rewritten.text,
+        },
+    )
 
 
 def style_paragraph(
@@ -417,7 +448,11 @@ def style_paragraph(
     skipped_fields = _apply_pptx_block_style(target["paragraph"], style, clear_set)
     target_path = _target_path(document_path, output_path)
     presentation.save(target_path)
-    return target_path, target["shape_locator"], {"cleared_fields": clear_set, "skipped_fields": skipped_fields}
+    return (
+        target_path,
+        target["shape_locator"],
+        {"cleared_fields": clear_set, "skipped_fields": skipped_fields},
+    )
 
 
 def parse_item_id(item_id: str) -> tuple[int, int]:
@@ -473,7 +508,9 @@ def _resolve_shape(presentation, item_id: str):
         if shape.shape_id == shape_id:
             return shape
 
-    raise TargetNotFoundError(f"Shape {shape_id} does not exist on slide {slide_number}.")
+    raise TargetNotFoundError(
+        f"Shape {shape_id} does not exist on slide {slide_number}."
+    )
 
 
 def _resolve_slide(presentation, slide_number: int):
@@ -537,12 +574,16 @@ def _default_textbox_geometry(
     slide_height = int(presentation.slide_height)
     resolved_width = width if width is not None else int(slide_width * 0.55)
     resolved_height = height if height is not None else int(slide_height * 0.2)
-    resolved_left = left if left is not None else int((slide_width - resolved_width) / 2)
+    resolved_left = (
+        left if left is not None else int((slide_width - resolved_width) / 2)
+    )
     resolved_top = top if top is not None else int((slide_height - resolved_height) / 2)
     return resolved_left, resolved_top, resolved_width, resolved_height
 
 
-def _resolve_text_target(presentation, locator: str, *, require_run: bool) -> dict[str, object]:
+def _resolve_text_target(
+    presentation, locator: str, *, require_run: bool
+) -> dict[str, object]:
     canonical = to_v2_locator(locator, file_type="pptx")
     parts = parse_locator(canonical).components
     if len(parts) < 5 or parts[:2] != ("pptx", "slide"):
@@ -606,7 +647,11 @@ def _resolve_paragraph_container(presentation, locator: str) -> dict[str, object
     if ":run:" in canonical:
         paragraph_locator = canonical.rsplit(":run:", maxsplit=1)[0]
     if ":para:" not in canonical:
-        text_frame = _require_text_frame(_resolve_shape(presentation, make_item_id(target["slide_number"], target["shape_id"])))
+        text_frame = _require_text_frame(
+            _resolve_shape(
+                presentation, make_item_id(target["slide_number"], target["shape_id"])
+            )
+        )
         if len(text_frame.paragraphs) != 1:
             raise TargetNotEditableError(
                 "PPTX range-based partial formatting requires a paragraph locator or a single-paragraph text shape."
@@ -667,7 +712,9 @@ def _notes_text(slide) -> str:
     text_frame = getattr(notes_slide, "notes_text_frame", None)
     if text_frame is None:
         return ""
-    lines = [paragraph.text for paragraph in text_frame.paragraphs if paragraph.text.strip()]
+    lines = [
+        paragraph.text for paragraph in text_frame.paragraphs if paragraph.text.strip()
+    ]
     return "\n".join(lines)
 
 
@@ -767,14 +814,18 @@ def _normalize_clear_fields(
     seen: set[str] = set()
     for field_name in clear_fields:
         if field_name not in allowed:
-            raise InvalidArgumentsError(f"Unknown style field in clear_fields: {field_name}")
+            raise InvalidArgumentsError(
+                f"Unknown style field in clear_fields: {field_name}"
+            )
         if field_name not in seen:
             normalized.append(field_name)
             seen.add(field_name)
     return tuple(normalized)
 
 
-def _apply_pptx_inline_style(run, style: InlineStyle, clear_fields: tuple[str, ...]) -> list[str]:
+def _apply_pptx_inline_style(
+    run, style: InlineStyle, clear_fields: tuple[str, ...]
+) -> list[str]:
     clear_set = set(clear_fields)
     font = run.font
     skipped_fields: list[str] = []
@@ -820,7 +871,9 @@ def _apply_pptx_inline_style(run, style: InlineStyle, clear_fields: tuple[str, .
     return skipped_fields
 
 
-def _apply_pptx_block_style(paragraph, style: BlockStyle, clear_fields: tuple[str, ...]) -> list[str]:
+def _apply_pptx_block_style(
+    paragraph, style: BlockStyle, clear_fields: tuple[str, ...]
+) -> list[str]:
     clear_set = set(clear_fields)
     skipped_fields: list[str] = []
 
@@ -871,7 +924,9 @@ def _pptx_alignment_value(raw: str):
 
 def _normalize_hex_color(value: str) -> str:
     normalized = value.strip().lstrip("#").upper()
-    if len(normalized) != 6 or any(character not in "0123456789ABCDEF" for character in normalized):
+    if len(normalized) != 6 or any(
+        character not in "0123456789ABCDEF" for character in normalized
+    ):
         raise InvalidArgumentsError(f"Invalid RGB hex color: {value}")
     return normalized
 
@@ -880,4 +935,6 @@ def _parse_index(raw: str, locator: str, *, label: str) -> int:
     try:
         return int(raw)
     except ValueError as exc:
-        raise InvalidArgumentsError(f"Invalid PPTX {label} index in locator: {locator}") from exc
+        raise InvalidArgumentsError(
+            f"Invalid PPTX {label} index in locator: {locator}"
+        ) from exc

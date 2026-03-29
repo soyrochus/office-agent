@@ -83,7 +83,9 @@ def render_search_hits(hits: Sequence[SearchHit]) -> str:
 def render_items(items: Sequence[ItemRef]) -> str:
     if not items:
         return "No items found."
-    return "\n".join(f"{item.item_id}\t{item.locator}\t{item.preview}" for item in items)
+    return "\n".join(
+        f"{item.item_id}\t{item.locator}\t{item.preview}" for item in items
+    )
 
 
 def render_patch_result(result: PatchResult) -> str:

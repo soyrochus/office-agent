@@ -26,6 +26,7 @@ office-agent = "offagent.interfaces.cli:main"
 [dependency-groups]
 dev = [
   "pytest>=8.0,<9",
+  "ruff>=0.15.8",
 ]
 
 [tool.setuptools]
