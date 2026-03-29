@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from offagent.app.services import IndexSummary, OutputMode, PatchResult
 from offagent.domain.models import (
     BatchResult,
+    BlockStyle,
     ChildSummary,
     DocxRun,
     DocxTableCell,
@@ -17,6 +18,7 @@ from offagent.domain.models import (
     DocxTable,
     DocumentRef,
     FileType,
+    InlineStyle,
     InsertContentResult,
     ItemRef,
     MutationResult,
@@ -395,6 +397,75 @@ class XlsxSetFormulaRequest(MCPModel):
 class XlsxMergeCellsRequest(MCPModel):
     document_id: str = Field(min_length=1)
     locator: str = Field(min_length=1)
+    output_mode: OutputMode = "versioned"
+
+
+class InlineStyleModel(MCPModel):
+    bold: bool | None = None
+    italic: bool | None = None
+    underline: bool | None = None
+    strike: bool | None = None
+    font_name: str | None = None
+    font_size: float | None = None
+    font_color: str | None = None
+    highlight: str | None = None
+
+    def to_domain(self) -> InlineStyle:
+        return InlineStyle(**self.model_dump())
+
+
+class BlockStyleModel(MCPModel):
+    alignment: str | None = None
+    indent_level: int | None = None
+    left_indent: float | None = None
+    right_indent: float | None = None
+    spacing_before: float | None = None
+    spacing_after: float | None = None
+    line_spacing: float | None = None
+    wrap_text: bool | None = None
+    vertical_alignment: str | None = None
+    fill_color: str | None = None
+    number_format: str | None = None
+
+    def to_domain(self) -> BlockStyle:
+        return BlockStyle(**self.model_dump())
+
+
+class CreateDocumentRequest(MCPModel):
+    format: FileType
+    output_path: str = Field(min_length=1)
+    initial_sheet_name: str | None = None
+    output_mode: OutputMode = "versioned"
+
+
+class AddContentBlockRequest(MCPModel):
+    document_id: str = Field(min_length=1)
+    block_type: str = Field(min_length=1)
+    properties: dict[str, Any] = Field(default_factory=dict)
+    output_mode: OutputMode = "versioned"
+
+
+class StyleInlineRequest(MCPModel):
+    document_id: str = Field(min_length=1)
+    locator: str = Field(min_length=1)
+    style: InlineStyleModel
+    clear_fields: list[str] = Field(default_factory=list)
+    output_mode: OutputMode = "versioned"
+
+
+class StyleBlockRequest(MCPModel):
+    document_id: str = Field(min_length=1)
+    locator: str = Field(min_length=1)
+    style: BlockStyleModel
+    clear_fields: list[str] = Field(default_factory=list)
+    output_mode: OutputMode = "versioned"
+
+
+class SetStructuralRoleRequest(MCPModel):
+    document_id: str = Field(min_length=1)
+    locator: str = Field(min_length=1)
+    role: str = Field(min_length=1)
+    level: int | None = Field(default=None, ge=1, le=9)
     output_mode: OutputMode = "versioned"
 
 

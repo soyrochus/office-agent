@@ -88,6 +88,33 @@ class XlsxRowEmbedding:
 
 
 @dataclass(frozen=True)
+class InlineStyle:
+    bold: bool | None = None
+    italic: bool | None = None
+    underline: bool | None = None
+    strike: bool | None = None
+    font_name: str | None = None
+    font_size: float | None = None
+    font_color: str | None = None
+    highlight: str | None = None
+
+
+@dataclass(frozen=True)
+class BlockStyle:
+    alignment: str | None = None
+    indent_level: int | None = None
+    left_indent: float | None = None
+    right_indent: float | None = None
+    spacing_before: float | None = None
+    spacing_after: float | None = None
+    line_spacing: float | None = None
+    wrap_text: bool | None = None
+    vertical_alignment: str | None = None
+    fill_color: str | None = None
+    number_format: str | None = None
+
+
+@dataclass(frozen=True)
 class PatchOperation:
     patch_id: str
     document_id: str

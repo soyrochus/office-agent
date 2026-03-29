@@ -67,6 +67,11 @@ def test_mcp_lists_tools_and_runs_docx_flow(sample_docx, config_path) -> None:
                 "batch_edit",
                 "delete_object",
                 "insert_content",
+                "create_document",
+                "add_content_block",
+                "style_inline",
+                "style_block",
+                "set_structural_role",
                 "xlsx_insert_rows",
                 "xlsx_write_range",
                 "xlsx_insert_columns",
@@ -344,3 +349,64 @@ def test_mcp_returns_structured_errors(sample_docx, sample_xlsx, config_path) ->
         return run()
 
     _run_mcp(config_path, scenario)
+
+
+def test_mcp_document_authoring_tools_round_trip(config_path, tmp_path) -> None:
+    def scenario(session: ClientSession):
+        async def run():
+            created = await _call_tool(
+                session,
+                "create_document",
+                {"format": "docx", "output_path": str(tmp_path / "mcp-author.docx")},
+            )
+            paragraph = await _call_tool(
+                session,
+                "add_content_block",
+                {
+                    "document_id": created["document_id"],
+                    "block_type": "paragraph",
+                    "properties": {"text": "Author this"},
+                },
+            )
+            inline = await _call_tool(
+                session,
+                "style_inline",
+                {
+                    "document_id": paragraph["document_id"],
+                    "locator": "docx:para:0:run:0",
+                    "style": {"italic": True, "font_color": "006699"},
+                },
+            )
+            block = await _call_tool(
+                session,
+                "style_block",
+                {
+                    "document_id": inline["document_id"],
+                    "locator": "docx:para:0",
+                    "style": {"alignment": "center"},
+                },
+            )
+            role = await _call_tool(
+                session,
+                "set_structural_role",
+                {
+                    "document_id": block["document_id"],
+                    "locator": "docx:para:0",
+                    "role": "heading",
+                    "level": 2,
+                },
+            )
+            return role
+
+        return run()
+
+    result = _run_mcp(config_path, scenario)
+
+    document = Document(result["output_path"])
+    paragraph = document.paragraphs[0]
+    run = paragraph.runs[0]
+    assert paragraph.text == "Author this"
+    assert paragraph.style.name == "Heading 2"
+    assert paragraph.alignment is not None
+    assert run.italic is True
+    assert str(run.font.color.rgb) == "006699"

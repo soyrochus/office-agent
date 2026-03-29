@@ -4,7 +4,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from offagent.domain.locators import parse_locator, to_v2_locator
 from offagent.domain.models import (
+    BlockStyle,
     BlockBundle,
     DocxRun,
     DocxParagraph,
@@ -12,6 +14,7 @@ from offagent.domain.models import (
     DocxTable,
     DocumentBlock,
     DocumentRef,
+    InlineStyle,
     IndexedItem,
     SectionPayload,
     StructureSection,
@@ -20,31 +23,26 @@ from offagent.errors import InvalidArgumentsError, TargetNotEditableError, Targe
 
 try:
     from docx import Document
+    from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_COLOR_INDEX
     from docx.oxml.table import CT_Tbl
     from docx.oxml.text.paragraph import CT_P
-    from docx.shared import RGBColor
+    from docx.shared import Pt, RGBColor
     from docx.table import Table
     from docx.text.paragraph import Paragraph
     from docx.text.run import Run
 except ModuleNotFoundError:  # pragma: no cover - exercised through dependency checks
     Document = None
+    WD_ALIGN_PARAGRAPH = None
+    WD_COLOR_INDEX = None
     CT_Tbl = None
     CT_P = None
+    Pt = None
     RGBColor = None
     Table = None
     Paragraph = None
     Run = None
 
-
-@dataclass(frozen=True)
-class RunFormatting:
-    bold: bool | None
-    italic: bool | None
-    underline: bool | None
-    strike: bool | None
-    font_name: str | None
-    font_size: int | None
-    color_rgb: str | None
+RunFormatting = InlineStyle
 
 
 @dataclass(frozen=True)
@@ -339,6 +337,130 @@ def insert_paragraph(
     return target_path, f"para:{paragraph_index}"
 
 
+def create_docx(output_path: Path) -> Path:
+    document = _open_document_from_default_template()
+    document.save(output_path)
+    return output_path
+
+
+def add_paragraph(
+    document_path: Path,
+    text: str,
+    output_path: Path | None = None,
+) -> tuple[Path, str]:
+    target_path, legacy_locator = insert_paragraph(
+        document_path,
+        text,
+        output_path=output_path,
+    )
+    return target_path, to_v2_locator(legacy_locator, file_type="docx")
+
+
+def add_heading(
+    document_path: Path,
+    text: str,
+    level: int,
+    output_path: Path | None = None,
+) -> tuple[Path, str]:
+    if level < 1 or level > 9:
+        raise InvalidArgumentsError("DOCX heading level must be between 1 and 9.")
+
+    document = _open_document(document_path)
+    paragraph = document.add_heading(text, level=level)
+    paragraph_index = sum(1 for block_type, _ in _iter_blocks(document) if block_type == "paragraph") - 1
+    target_path = _target_path(document_path, output_path)
+    document.save(target_path)
+    return target_path, f"docx:para:{paragraph_index}"
+
+
+def add_table(
+    document_path: Path,
+    rows: int,
+    columns: int,
+    output_path: Path | None = None,
+) -> tuple[Path, str]:
+    if rows < 1 or columns < 1:
+        raise InvalidArgumentsError("DOCX table rows and columns must be positive.")
+
+    document = _open_document(document_path)
+    table_index = sum(1 for block_type, _ in _iter_blocks(document) if block_type == "table")
+    document.add_table(rows=rows, cols=columns)
+    target_path = _target_path(document_path, output_path)
+    document.save(target_path)
+    return target_path, f"docx:table:{table_index}"
+
+
+def style_run(
+    document_path: Path,
+    locator: str,
+    style: InlineStyle,
+    clear_fields: list[str] | tuple[str, ...],
+    output_path: Path | None = None,
+) -> tuple[Path, str, dict[str, object]]:
+    document = _open_document(document_path)
+    canonical, components = _canonical_docx_locator(locator)
+    if len(components) != 5 or components[:2] != ("docx", "para") or components[3] != "run":
+        raise InvalidArgumentsError("DOCX inline styling requires a run locator.")
+
+    paragraph = _resolve_paragraph(document, f"para:{components[2]}")
+    run_index = _parse_int_component(components[4], locator)
+    try:
+        run = paragraph.runs[run_index]
+    except IndexError as exc:
+        raise TargetNotFoundError(
+            f"Run {run_index} does not exist in paragraph {components[2]}."
+        ) from exc
+
+    cleared_fields = _normalize_clear_fields(clear_fields, _INLINE_STYLE_FIELDS)
+    _apply_docx_inline_style(run, style, cleared_fields)
+    target_path = _target_path(document_path, output_path)
+    document.save(target_path)
+    return target_path, canonical, {"cleared_fields": cleared_fields}
+
+
+def style_paragraph(
+    document_path: Path,
+    locator: str,
+    style: BlockStyle,
+    clear_fields: list[str] | tuple[str, ...],
+    output_path: Path | None = None,
+) -> tuple[Path, str, dict[str, object]]:
+    document = _open_document(document_path)
+    canonical, components = _canonical_docx_locator(locator)
+    if len(components) != 3 or components[:2] != ("docx", "para"):
+        raise InvalidArgumentsError("DOCX block styling requires a paragraph locator.")
+
+    paragraph = _resolve_paragraph(document, f"para:{components[2]}")
+    cleared_fields = _normalize_clear_fields(clear_fields, _BLOCK_STYLE_FIELDS)
+    skipped_fields = _apply_docx_block_style(paragraph, style, cleared_fields)
+    target_path = _target_path(document_path, output_path)
+    document.save(target_path)
+    return target_path, canonical, {"cleared_fields": cleared_fields, "skipped_fields": skipped_fields}
+
+
+def set_structural_role(
+    document_path: Path,
+    locator: str,
+    role: str,
+    level: int | None,
+    output_path: Path | None = None,
+) -> tuple[Path, str, dict[str, object]]:
+    document = _open_document(document_path)
+    canonical, components = _canonical_docx_locator(locator)
+    if len(components) != 3 or components[:2] != ("docx", "para"):
+        raise InvalidArgumentsError("set_structural_role requires a DOCX paragraph locator.")
+
+    style_name = _docx_structural_style_name(role, level)
+    if not any(getattr(style, "name", None) == style_name for style in document.styles):
+        raise TargetNotEditableError(f"DOCX style {style_name!r} is not available in the document.")
+
+    paragraph = _resolve_paragraph(document, f"para:{components[2]}")
+    paragraph.style = style_name
+    target_path = _target_path(document_path, output_path)
+    document.save(target_path)
+    return target_path, canonical, {"role": role, "level": level, "style_name": style_name}
+
+
 def get_blocks(document_path: Path) -> tuple[DocumentBlock, ...]:
     document = _open_document(document_path)
     blocks: list[DocumentBlock] = []
@@ -506,6 +628,12 @@ def _open_document(document_path: Path):
     return Document(str(document_path))
 
 
+def _open_document_from_default_template():
+    if Document is None:
+        raise RuntimeError("python-docx is required for DOCX operations.")
+    return Document()
+
+
 def _document_ref(document_path: Path):
     resolved_path = document_path.resolve()
     stat = resolved_path.stat()
@@ -587,22 +715,15 @@ def _capture_run_formatting(run: Run | None) -> RunFormatting | None:
     if run is None:
         return None
 
-    color_rgb = None
-    if run.font.color.rgb is not None:
-        color_rgb = str(run.font.color.rgb)
-
-    font_size = None
-    if run.font.size is not None:
-        font_size = int(run.font.size)
-
     return RunFormatting(
         bold=run.bold,
         italic=run.italic,
         underline=run.underline,
         strike=run.font.strike,
         font_name=run.font.name,
-        font_size=font_size,
-        color_rgb=color_rgb,
+        font_size=None if run.font.size is None else run.font.size.pt,
+        font_color=None if run.font.color.rgb is None else str(run.font.color.rgb),
+        highlight=_docx_highlight_name(run.font.highlight_color),
     )
 
 
@@ -610,15 +731,7 @@ def _apply_run_formatting(run: Run, formatting: RunFormatting | None) -> None:
     if formatting is None:
         return
 
-    run.bold = formatting.bold
-    run.italic = formatting.italic
-    run.underline = formatting.underline
-    run.font.strike = formatting.strike
-    run.font.name = formatting.font_name
-    if formatting.font_size is not None:
-        run.font.size = formatting.font_size
-    if formatting.color_rgb is not None:
-        run.font.color.rgb = RGBColor.from_string(formatting.color_rgb)
+    _apply_docx_inline_style(run, formatting, ())
 
 
 def _clear_paragraph(paragraph) -> None:
@@ -705,3 +818,225 @@ def _paragraphs_before_block(document, block_index: int) -> int:
         if block_type == "paragraph":
             count += 1
     return count
+
+
+_INLINE_STYLE_FIELDS = frozenset(
+    {
+        "bold",
+        "italic",
+        "underline",
+        "strike",
+        "font_name",
+        "font_size",
+        "font_color",
+        "highlight",
+    }
+)
+_BLOCK_STYLE_FIELDS = frozenset(
+    {
+        "alignment",
+        "indent_level",
+        "left_indent",
+        "right_indent",
+        "spacing_before",
+        "spacing_after",
+        "line_spacing",
+        "wrap_text",
+        "vertical_alignment",
+        "fill_color",
+        "number_format",
+    }
+)
+_DOCX_ALIGNMENT_MAP = {
+    "left": None if WD_ALIGN_PARAGRAPH is None else WD_ALIGN_PARAGRAPH.LEFT,
+    "center": None if WD_ALIGN_PARAGRAPH is None else WD_ALIGN_PARAGRAPH.CENTER,
+    "right": None if WD_ALIGN_PARAGRAPH is None else WD_ALIGN_PARAGRAPH.RIGHT,
+    "justify": None if WD_ALIGN_PARAGRAPH is None else WD_ALIGN_PARAGRAPH.JUSTIFY,
+}
+_DOCX_HIGHLIGHT_MAP = {
+    "yellow": None if WD_COLOR_INDEX is None else WD_COLOR_INDEX.YELLOW,
+    "green": None if WD_COLOR_INDEX is None else WD_COLOR_INDEX.BRIGHT_GREEN,
+    "turquoise": None if WD_COLOR_INDEX is None else WD_COLOR_INDEX.TURQUOISE,
+    "pink": None if WD_COLOR_INDEX is None else WD_COLOR_INDEX.PINK,
+    "blue": None if WD_COLOR_INDEX is None else WD_COLOR_INDEX.BLUE,
+    "red": None if WD_COLOR_INDEX is None else WD_COLOR_INDEX.RED,
+    "dark_blue": None if WD_COLOR_INDEX is None else WD_COLOR_INDEX.DARK_BLUE,
+    "teal": None if WD_COLOR_INDEX is None else WD_COLOR_INDEX.TEAL,
+    "green_dark": None if WD_COLOR_INDEX is None else WD_COLOR_INDEX.GREEN,
+    "violet": None if WD_COLOR_INDEX is None else WD_COLOR_INDEX.VIOLET,
+    "dark_red": None if WD_COLOR_INDEX is None else WD_COLOR_INDEX.DARK_RED,
+    "dark_yellow": None if WD_COLOR_INDEX is None else WD_COLOR_INDEX.DARK_YELLOW,
+    "gray_50": None if WD_COLOR_INDEX is None else WD_COLOR_INDEX.GRAY_50,
+    "gray_25": None if WD_COLOR_INDEX is None else WD_COLOR_INDEX.GRAY_25,
+    "black": None if WD_COLOR_INDEX is None else WD_COLOR_INDEX.BLACK,
+}
+_DOCX_HIGHLIGHT_NAMES = {
+    value: key for key, value in _DOCX_HIGHLIGHT_MAP.items() if value is not None
+}
+
+
+def _canonical_docx_locator(locator: str) -> tuple[str, tuple[str, ...]]:
+    canonical = to_v2_locator(locator, file_type="docx")
+    parsed = parse_locator(canonical)
+    return canonical, parsed.components
+
+
+def _normalize_clear_fields(
+    clear_fields: list[str] | tuple[str, ...],
+    allowed: frozenset[str],
+) -> tuple[str, ...]:
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for field_name in clear_fields:
+        if field_name not in allowed:
+            raise InvalidArgumentsError(f"Unknown style field in clear_fields: {field_name}")
+        if field_name not in seen:
+            normalized.append(field_name)
+            seen.add(field_name)
+    return tuple(normalized)
+
+
+def _apply_docx_inline_style(run: Run, style: InlineStyle, clear_fields: tuple[str, ...]) -> None:
+    clear_set = set(clear_fields)
+    if "bold" in clear_set:
+        run.bold = None
+    elif style.bold is not None:
+        run.bold = style.bold
+
+    if "italic" in clear_set:
+        run.italic = None
+    elif style.italic is not None:
+        run.italic = style.italic
+
+    if "underline" in clear_set:
+        run.underline = None
+    elif style.underline is not None:
+        run.underline = style.underline
+
+    if "strike" in clear_set:
+        run.font.strike = None
+    elif style.strike is not None:
+        run.font.strike = style.strike
+
+    if "font_name" in clear_set:
+        run.font.name = None
+    elif style.font_name is not None:
+        run.font.name = style.font_name
+
+    if "font_size" in clear_set:
+        run.font.size = None
+    elif style.font_size is not None:
+        if Pt is None:
+            raise RuntimeError("python-docx is required for DOCX operations.")
+        run.font.size = Pt(style.font_size)
+
+    if "font_color" in clear_set:
+        run.font.color.rgb = None
+    elif style.font_color is not None:
+        run.font.color.rgb = RGBColor.from_string(_normalize_hex_color(style.font_color))
+
+    if "highlight" in clear_set:
+        run.font.highlight_color = None
+    elif style.highlight is not None:
+        run.font.highlight_color = _docx_highlight_value(style.highlight)
+
+
+def _apply_docx_block_style(
+    paragraph,
+    style: BlockStyle,
+    clear_fields: tuple[str, ...],
+) -> list[str]:
+    paragraph_format = paragraph.paragraph_format
+    clear_set = set(clear_fields)
+    skipped_fields: list[str] = []
+
+    if "alignment" in clear_set:
+        paragraph.alignment = None
+    elif style.alignment is not None:
+        paragraph.alignment = _docx_alignment_value(style.alignment)
+
+    if "left_indent" in clear_set:
+        paragraph_format.left_indent = None
+    elif style.left_indent is not None:
+        paragraph_format.left_indent = Pt(style.left_indent)
+
+    if "right_indent" in clear_set:
+        paragraph_format.right_indent = None
+    elif style.right_indent is not None:
+        paragraph_format.right_indent = Pt(style.right_indent)
+
+    if "spacing_before" in clear_set:
+        paragraph_format.space_before = None
+    elif style.spacing_before is not None:
+        paragraph_format.space_before = Pt(style.spacing_before)
+
+    if "spacing_after" in clear_set:
+        paragraph_format.space_after = None
+    elif style.spacing_after is not None:
+        paragraph_format.space_after = Pt(style.spacing_after)
+
+    if "line_spacing" in clear_set:
+        paragraph_format.line_spacing = None
+    elif style.line_spacing is not None:
+        paragraph_format.line_spacing = style.line_spacing
+
+    for field_name in (
+        "indent_level",
+        "wrap_text",
+        "vertical_alignment",
+        "fill_color",
+        "number_format",
+    ):
+        if getattr(style, field_name) is not None or field_name in clear_set:
+            skipped_fields.append(field_name)
+
+    return skipped_fields
+
+
+def _docx_alignment_value(raw: str):
+    normalized = raw.strip().lower()
+    if normalized not in _DOCX_ALIGNMENT_MAP:
+        raise InvalidArgumentsError(f"Unsupported DOCX alignment: {raw}")
+    return _DOCX_ALIGNMENT_MAP[normalized]
+
+
+def _docx_highlight_value(raw: str):
+    normalized = raw.strip().lower()
+    if normalized not in _DOCX_HIGHLIGHT_MAP:
+        raise InvalidArgumentsError(f"Unsupported DOCX highlight color: {raw}")
+    return _DOCX_HIGHLIGHT_MAP[normalized]
+
+
+def _docx_highlight_name(value) -> str | None:
+    return _DOCX_HIGHLIGHT_NAMES.get(value)
+
+
+def _docx_structural_style_name(role: str, level: int | None) -> str:
+    normalized = role.strip().lower()
+    if normalized == "heading":
+        if level is None or level < 1 or level > 9:
+            raise InvalidArgumentsError("Heading structural role requires level between 1 and 9.")
+        return f"Heading {level}"
+    mapping = {
+        "title": "Title",
+        "body": "Normal",
+        "table_header": "Table Heading",
+        "caption": "Caption",
+    }
+    if normalized not in mapping:
+        raise InvalidArgumentsError(f"Unsupported structural role: {role}")
+    return mapping[normalized]
+
+
+def _normalize_hex_color(value: str) -> str:
+    normalized = value.strip().lstrip("#").upper()
+    if len(normalized) != 6 or any(character not in "0123456789ABCDEF" for character in normalized):
+        raise InvalidArgumentsError(f"Invalid RGB hex color: {value}")
+    return normalized
+
+
+def _parse_int_component(raw: str, locator: str) -> int:
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise InvalidArgumentsError(f"Invalid DOCX locator: {locator}") from exc

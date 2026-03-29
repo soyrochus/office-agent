@@ -16,11 +16,14 @@ from offagent.errors import (
 )
 from offagent.interfaces import mcp_converters
 from offagent.interfaces.mcp_models import (
+    AddContentBlockRequest,
     BatchEditRequest,
     BatchResultModel,
     CopyObjectRequest,
+    CreateDocumentRequest,
     CreateObjectRequest,
     DeleteObjectRequest,
+    BlockStyleModel,
     DocxAddTableRequest,
     DocxGetTablesResult,
     DocxInsertPageBreakRequest,
@@ -53,6 +56,9 @@ from offagent.interfaces.mcp_models import (
     SearchObjectsResult,
     SectionRequest,
     SemanticDocumentRequest,
+    SetStructuralRoleRequest,
+    StyleBlockRequest,
+    StyleInlineRequest,
     UpdateObjectRequest,
     WriteNodeRequest,
     WriteNodeResult,
@@ -259,6 +265,145 @@ def build_mcp_server(config: AppConfig):
                     request.content,
                     style_name=request.style_name,
                     after_node_id=request.after_node_id,
+                    output_mode=request.output_mode,
+                )
+            )
+        )
+
+    @mcp.tool(description="Create a new empty DOCX, PPTX, or XLSX document and index it immediately.")
+    def create_document(
+        format: str,
+        output_path: str,
+        initial_sheet_name: str | None = None,
+        output_mode: str = "versioned",
+    ) -> MutationResultModel:
+        request = CreateDocumentRequest.model_validate(
+            {
+                "format": format,
+                "output_path": output_path,
+                "initial_sheet_name": initial_sheet_name,
+                "output_mode": output_mode,
+            }
+        )
+        return _run_tool(
+            lambda: mcp_converters.convert_mutation_result(
+                services.create_document(
+                    request.format,
+                    Path(request.output_path).expanduser(),
+                    initial_sheet_name=request.initial_sheet_name,
+                    output_mode=request.output_mode,
+                )
+            )
+        )
+
+    @mcp.tool(description="Add a format-specific content block to an existing Office document.")
+    def add_content_block(
+        document_id: str,
+        block_type: str,
+        properties: dict,
+        output_mode: str = "versioned",
+    ) -> MutationResultModel:
+        request = AddContentBlockRequest.model_validate(
+            {
+                "document_id": document_id,
+                "block_type": block_type,
+                "properties": properties,
+                "output_mode": output_mode,
+            }
+        )
+        return _run_tool(
+            lambda: mcp_converters.convert_mutation_result(
+                services.add_content_block(
+                    request.document_id,
+                    request.block_type,
+                    request.properties,
+                    output_mode=request.output_mode,
+                )
+            )
+        )
+
+    @mcp.tool(description="Apply inline font styling to a DOCX run, PPTX text run, or XLSX cell.")
+    def style_inline(
+        document_id: str,
+        locator: str,
+        style: dict,
+        clear_fields: list[str] | None = None,
+        output_mode: str = "versioned",
+    ) -> MutationResultModel:
+        request = StyleInlineRequest.model_validate(
+            {
+                "document_id": document_id,
+                "locator": locator,
+                "style": style,
+                "clear_fields": clear_fields or [],
+                "output_mode": output_mode,
+            }
+        )
+        return _run_tool(
+            lambda: mcp_converters.convert_mutation_result(
+                services.style_inline(
+                    request.document_id,
+                    request.locator,
+                    request.style.to_domain(),
+                    request.clear_fields,
+                    output_mode=request.output_mode,
+                )
+            )
+        )
+
+    @mcp.tool(description="Apply block-level styling to a DOCX paragraph, PPTX paragraph, or XLSX cell.")
+    def style_block(
+        document_id: str,
+        locator: str,
+        style: dict,
+        clear_fields: list[str] | None = None,
+        output_mode: str = "versioned",
+    ) -> MutationResultModel:
+        request = StyleBlockRequest.model_validate(
+            {
+                "document_id": document_id,
+                "locator": locator,
+                "style": style,
+                "clear_fields": clear_fields or [],
+                "output_mode": output_mode,
+            }
+        )
+        return _run_tool(
+            lambda: mcp_converters.convert_mutation_result(
+                services.style_block(
+                    request.document_id,
+                    request.locator,
+                    request.style.to_domain(),
+                    request.clear_fields,
+                    output_mode=request.output_mode,
+                )
+            )
+        )
+
+    @mcp.tool(description="Apply a DOCX structural role using standard Word paragraph styles.")
+    def set_structural_role(
+        document_id: str,
+        locator: str,
+        role: str,
+        level: int | None = None,
+        output_mode: str = "versioned",
+    ) -> MutationResultModel:
+        request = SetStructuralRoleRequest.model_validate(
+            {
+                "document_id": document_id,
+                "locator": locator,
+                "role": role,
+                "level": level,
+                "output_mode": output_mode,
+            }
+        )
+        return _run_tool(
+            lambda: mcp_converters.convert_mutation_result(
+                services.set_structural_role(
+                    request.document_id,
+                    request.locator,
+                    request.role,
+                    level=request.level,
                     output_mode=request.output_mode,
                 )
             )

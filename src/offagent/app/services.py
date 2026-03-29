@@ -21,6 +21,7 @@ from offagent.config import AppConfig
 from offagent.domain.locators import parse_locator, to_legacy_locator, to_v2_locator
 from offagent.domain.models import (
     BatchResult,
+    BlockStyle,
     BlockBundle,
     ChildSummary,
     Capability,
@@ -33,6 +34,7 @@ from offagent.domain.models import (
     FileType,
     IndexedItem,
     InsertContentResult,
+    InlineStyle,
     ItemRef,
     NodePayload,
     NodeWriteResult,
@@ -925,6 +927,254 @@ class AppServices:
             raise
         return self._finalize_object_mutation(document, output_path, merged_locator, summary, metadata)
 
+    def create_document(
+        self,
+        format: str,
+        output_path: Path,
+        *,
+        output_mode: OutputMode = "versioned",
+        initial_sheet_name: str | None = None,
+    ) -> MutationResult:
+        normalized_format = str(format).strip().lower()
+        if normalized_format not in {"docx", "pptx", "xlsx"}:
+            raise InvalidArgumentsError(f"Unsupported document format: {format}")
+
+        requested_path = canonicalize_output_path(output_path)
+        if requested_path.suffix.lower() != f".{normalized_format}":
+            raise InvalidArgumentsError(
+                f"create_document output path must use the .{normalized_format} extension."
+            )
+
+        target_path = self._resolve_create_output_path(requested_path, output_mode=output_mode)
+        if normalized_format == "docx":
+            docx_adapter.create_docx(target_path)
+            locator = "docx:document"
+        elif normalized_format == "pptx":
+            pptx_adapter.create_pptx(target_path)
+            locator = "pptx:presentation"
+        else:
+            xlsx_adapter.create_xlsx(target_path, initial_sheet_name=initial_sheet_name)
+            locator = "xlsx:workbook"
+
+        output_document = self.index_document(target_path)
+        payload = self.get_object(output_document.document_id, locator)
+        metadata: dict[str, Any] = {"format": normalized_format}
+        if initial_sheet_name is not None:
+            metadata["initial_sheet_name"] = initial_sheet_name
+        return MutationResult(
+            document_path=target_path,
+            output_path=target_path,
+            document_id=output_document.document_id,
+            locator=payload.locator,
+            object_type=payload.object_type,
+            summary=f"Created {normalized_format.upper()} document at {target_path}.",
+            capabilities=payload.capabilities,
+            parent_locator=payload.parent_locator,
+            metadata=metadata,
+        )
+
+    def add_content_block(
+        self,
+        document_id: str,
+        block_type: str,
+        properties: dict[str, Any],
+        *,
+        output_mode: OutputMode = "versioned",
+    ) -> MutationResult:
+        document = self.get_document(document_id)
+        normalized_block_type = str(block_type).strip().lower()
+        output_path = self._resolve_write_output_path(document.path, output_mode=output_mode)
+
+        try:
+            locator = self._dispatch_add_content_block(
+                document,
+                normalized_block_type,
+                properties,
+                output_path,
+            )
+        except (InvalidArgumentsError, TargetNotFoundError, TargetNotEditableError) as exc:
+            stale_locator = next(
+                (
+                    value
+                    for key, value in properties.items()
+                    if key in {"locator", "slide", "slide_locator", "sheet", "sheet_locator"}
+                    and isinstance(value, str)
+                ),
+                "docx:document" if document.file_type == "docx" else None,
+            )
+            self._raise_stale_if_document_changed(document, stale_locator or document.path.as_posix(), exc)
+            raise
+
+        output_document = self.index_document(output_path)
+        payload = self.get_object(output_document.document_id, locator)
+        return MutationResult(
+            document_path=document.path,
+            output_path=output_path,
+            document_id=output_document.document_id,
+            locator=payload.locator,
+            object_type=payload.object_type,
+            summary=f"Added {normalized_block_type} to {document.file_type.upper()} document.",
+            capabilities=payload.capabilities,
+            parent_locator=payload.parent_locator,
+            metadata={"block_type": normalized_block_type, **payload.metadata},
+        )
+
+    def style_inline(
+        self,
+        document_id: str,
+        locator: str,
+        style: InlineStyle,
+        clear_fields: list[str] | tuple[str, ...] | None = None,
+        *,
+        output_mode: OutputMode = "versioned",
+    ) -> MutationResult:
+        document = self.get_document(document_id)
+        self._ensure_object_locator_fresh(document, locator)
+        output_path = self._resolve_write_output_path(document.path, output_mode=output_mode)
+        clear_list = [] if clear_fields is None else list(clear_fields)
+
+        try:
+            if document.file_type == "docx":
+                output_path, result_locator, metadata = docx_adapter.style_run(
+                    document.path,
+                    locator,
+                    style,
+                    clear_list,
+                    output_path=output_path,
+                )
+            elif document.file_type == "pptx":
+                output_path, result_locator, metadata = pptx_adapter.style_run(
+                    document.path,
+                    locator,
+                    style,
+                    clear_list,
+                    output_path=output_path,
+                )
+            else:
+                output_path, result_locator, metadata = xlsx_adapter.style_cell_inline(
+                    document.path,
+                    locator,
+                    style,
+                    clear_list,
+                    output_path=output_path,
+                )
+        except (InvalidArgumentsError, TargetNotFoundError, TargetNotEditableError) as exc:
+            self._raise_stale_if_document_changed(document, locator, exc)
+            raise
+
+        output_document = self.index_document(output_path)
+        payload = self.get_object(output_document.document_id, result_locator)
+        return MutationResult(
+            document_path=document.path,
+            output_path=output_path,
+            document_id=output_document.document_id,
+            locator=payload.locator,
+            object_type=payload.object_type,
+            summary=f"Applied inline style at {locator}.",
+            capabilities=payload.capabilities,
+            parent_locator=payload.parent_locator,
+            metadata=metadata,
+        )
+
+    def style_block(
+        self,
+        document_id: str,
+        locator: str,
+        style: BlockStyle,
+        clear_fields: list[str] | tuple[str, ...] | None = None,
+        *,
+        output_mode: OutputMode = "versioned",
+    ) -> MutationResult:
+        document = self.get_document(document_id)
+        self._ensure_object_locator_fresh(document, locator)
+        output_path = self._resolve_write_output_path(document.path, output_mode=output_mode)
+        clear_list = [] if clear_fields is None else list(clear_fields)
+
+        try:
+            if document.file_type == "docx":
+                output_path, result_locator, metadata = docx_adapter.style_paragraph(
+                    document.path,
+                    locator,
+                    style,
+                    clear_list,
+                    output_path=output_path,
+                )
+            elif document.file_type == "pptx":
+                output_path, result_locator, metadata = pptx_adapter.style_paragraph(
+                    document.path,
+                    locator,
+                    style,
+                    clear_list,
+                    output_path=output_path,
+                )
+            else:
+                output_path, result_locator, metadata = xlsx_adapter.style_cell_block(
+                    document.path,
+                    locator,
+                    style,
+                    clear_list,
+                    output_path=output_path,
+                )
+        except (InvalidArgumentsError, TargetNotFoundError, TargetNotEditableError) as exc:
+            self._raise_stale_if_document_changed(document, locator, exc)
+            raise
+
+        output_document = self.index_document(output_path)
+        payload = self.get_object(output_document.document_id, result_locator)
+        return MutationResult(
+            document_path=document.path,
+            output_path=output_path,
+            document_id=output_document.document_id,
+            locator=payload.locator,
+            object_type=payload.object_type,
+            summary=f"Applied block style at {locator}.",
+            capabilities=payload.capabilities,
+            parent_locator=payload.parent_locator,
+            metadata=metadata,
+        )
+
+    def set_structural_role(
+        self,
+        document_id: str,
+        locator: str,
+        role: str,
+        level: int | None = None,
+        *,
+        output_mode: OutputMode = "versioned",
+    ) -> MutationResult:
+        document = self._require_document_type(
+            document_id,
+            expected="docx",
+            operation="set_structural_role",
+        )
+        self._ensure_object_locator_fresh(document, locator)
+        output_path = self._resolve_write_output_path(document.path, output_mode=output_mode)
+        try:
+            output_path, result_locator, metadata = docx_adapter.set_structural_role(
+                document.path,
+                locator,
+                role,
+                level,
+                output_path=output_path,
+            )
+        except (InvalidArgumentsError, TargetNotFoundError, TargetNotEditableError) as exc:
+            self._raise_stale_if_document_changed(document, locator, exc)
+            raise
+
+        output_document = self.index_document(output_path)
+        payload = self.get_object(output_document.document_id, result_locator)
+        return MutationResult(
+            document_path=document.path,
+            output_path=output_path,
+            document_id=output_document.document_id,
+            locator=payload.locator,
+            object_type=payload.object_type,
+            summary=f"Applied structural role {role!r} at {locator}.",
+            capabilities=payload.capabilities,
+            parent_locator=payload.parent_locator,
+            metadata=metadata,
+        )
+
     def write_node(
         self,
         document_id: str,
@@ -1794,6 +2044,143 @@ class AppServices:
                 f"stale locator: {locator} is no longer valid for {document.path}"
             ) from exc
 
+    def _resolve_create_output_path(
+        self,
+        output_path: Path,
+        *,
+        output_mode: OutputMode,
+    ) -> Path:
+        normalized_mode = _normalize_output_mode(output_mode)
+        if normalized_mode == "inplace":
+            if not self.config.allow_inplace_overwrite:
+                raise PolicyRefusedError(
+                    "In-place overwrite is not enabled. Set allow_inplace_overwrite = true to use output-mode inplace."
+                )
+            resolved_output = self._ensure_allowed_output_path(output_path)
+            resolved_output.parent.mkdir(parents=True, exist_ok=True)
+            return resolved_output
+
+        target_path = versioning.build_versioned_output_path(
+            output_path,
+            output_directory=self.config.output_directory,
+            create_directory=False,
+        )
+        self._ensure_allowed_output_path(target_path)
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        return target_path
+
+    def _dispatch_add_content_block(
+        self,
+        document: DocumentRef,
+        block_type: str,
+        properties: dict[str, Any],
+        output_path: Path,
+    ) -> str:
+        if document.file_type == "docx":
+            if block_type == "paragraph":
+                _, locator = docx_adapter.add_paragraph(
+                    document.path,
+                    str(properties.get("text", "")),
+                    output_path=output_path,
+                )
+                return locator
+            if block_type == "heading":
+                _, locator = docx_adapter.add_heading(
+                    document.path,
+                    str(properties.get("text", "")),
+                    int(properties.get("level", 1)),
+                    output_path=output_path,
+                )
+                return locator
+            if block_type == "table":
+                rows = int(properties.get("rows", 0))
+                columns = int(properties.get("columns", 0))
+                _, locator = docx_adapter.add_table(
+                    document.path,
+                    rows,
+                    columns,
+                    output_path=output_path,
+                )
+                return locator
+
+        if document.file_type == "pptx":
+            if block_type == "slide":
+                _, locator = pptx_adapter.add_slide(document.path, output_path=output_path)
+                return locator
+            if block_type == "textbox":
+                slide_locator = next(
+                    (
+                        value
+                        for key, value in properties.items()
+                        if key in {"slide", "slide_locator", "locator"} and isinstance(value, str)
+                    ),
+                    None,
+                )
+                if slide_locator is None:
+                    raise InvalidArgumentsError("PPTX textbox blocks require a slide locator.")
+                _, locator = pptx_adapter.add_textbox(
+                    document.path,
+                    slide_locator,
+                    str(properties.get("text", "")),
+                    left=_optional_int(properties.get("left")),
+                    top=_optional_int(properties.get("top")),
+                    width=_optional_int(properties.get("width")),
+                    height=_optional_int(properties.get("height")),
+                    output_path=output_path,
+                )
+                return locator
+
+        if document.file_type == "xlsx":
+            if block_type == "sheet":
+                name = properties.get("name")
+                if not isinstance(name, str):
+                    raise InvalidArgumentsError("XLSX sheet blocks require a sheet name.")
+                _, locator = xlsx_adapter.add_sheet(document.path, name, output_path=output_path)
+                return locator
+            if block_type == "row":
+                sheet_locator = next(
+                    (
+                        value
+                        for key, value in properties.items()
+                        if key in {"sheet", "sheet_locator", "locator"} and isinstance(value, str)
+                    ),
+                    None,
+                )
+                if sheet_locator is None:
+                    raise InvalidArgumentsError("XLSX row blocks require a worksheet locator.")
+                values = properties.get("values")
+                if not isinstance(values, list):
+                    raise InvalidArgumentsError("XLSX row blocks require a values list.")
+                _, locator = xlsx_adapter.add_row(
+                    document.path,
+                    sheet_locator,
+                    values,
+                    output_path=output_path,
+                )
+                return locator
+            if block_type == "cell":
+                cell_locator = next(
+                    (
+                        value
+                        for key, value in properties.items()
+                        if key in {"cell", "cell_locator", "locator"} and isinstance(value, str)
+                    ),
+                    None,
+                )
+                if cell_locator is None:
+                    raise InvalidArgumentsError("XLSX cell blocks require a cell locator.")
+                xlsx_adapter.write_cell(
+                    document.path,
+                    to_legacy_locator(cell_locator, file_type="xlsx"),
+                    properties.get("value"),
+                    output_path=output_path,
+                )
+                return to_v2_locator(cell_locator, file_type="xlsx")
+
+        raise InvalidArgumentsError(
+            f"Unsupported add_content_block combination: {document.file_type}/{block_type}"
+        )
+
     def _resolve_write_output_path(
         self,
         document_path: Path,
@@ -2216,6 +2603,17 @@ def _normalize_output_mode(output_mode: str) -> OutputMode:
     if normalized not in {"versioned", "inplace"}:
         raise InvalidArgumentsError(f"Unsupported output mode: {output_mode}")
     return normalized  # type: ignore[return-value]
+
+
+def _optional_int(value: object) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise InvalidArgumentsError(f"Expected integer value, got {value!r}.")
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise InvalidArgumentsError(f"Expected integer value, got {value!r}.") from exc
 
 
 def _content_hash(path: Path) -> str:

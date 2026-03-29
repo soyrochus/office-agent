@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+from copy import copy
 from dataclasses import dataclass
 from pathlib import Path
 import re
 
+from offagent.domain.locators import parse_locator, to_v2_locator
 from offagent.domain.models import (
+    BlockStyle,
     DocumentRef,
+    InlineStyle,
     IndexedItem,
     SectionPayload,
     SheetCell,
@@ -21,9 +25,14 @@ from offagent.errors import InvalidArgumentsError, TargetNotEditableError
 from offagent.errors import TargetNotFoundError
 
 try:
-    from openpyxl import load_workbook
+    from openpyxl import Workbook, load_workbook
+    from openpyxl.styles import Alignment, Font, PatternFill
     from openpyxl.utils.cell import coordinate_to_tuple, get_column_letter, range_boundaries
 except ModuleNotFoundError:  # pragma: no cover - exercised through dependency checks
+    Workbook = None
+    Alignment = None
+    Font = None
+    PatternFill = None
     load_workbook = None
     coordinate_to_tuple = None
     get_column_letter = None
@@ -179,13 +188,55 @@ def read_cell(document_path: Path, item_id: str) -> str:
     return resolved.display_text
 
 
-def write_cell(document_path: Path, item_id: str, value: str, output_path: Path | None = None) -> Path:
+def create_xlsx(output_path: Path, initial_sheet_name: str | None = None) -> Path:
+    if Workbook is None:
+        raise RuntimeError("openpyxl is required for XLSX operations.")
+    workbook = Workbook()
+    workbook.active.title = initial_sheet_name or "Sheet1"
+    workbook.save(output_path)
+    return output_path
+
+
+def add_sheet(
+    document_path: Path,
+    name: str,
+    output_path: Path | None = None,
+) -> tuple[Path, str]:
+    workbook = _open_workbook(document_path)
+    if not name.strip():
+        raise InvalidArgumentsError("Worksheet name cannot be empty.")
+    if name in workbook.sheetnames:
+        raise InvalidArgumentsError(f"Worksheet {name!r} already exists.")
+    workbook.create_sheet(title=name)
+    target_path = _target_path(document_path, output_path)
+    workbook.save(target_path)
+    return target_path, f"xlsx:sheet:{name}"
+
+
+def write_cell(document_path: Path, item_id: str, value: object, output_path: Path | None = None) -> Path:
     workbook = _open_workbook(document_path)
     cell = _resolve_cell(workbook, item_id)
-    cell.value = _coerce_value(value)
+    cell.value = _coerce_write_value(value)
     target_path = _target_path(document_path, output_path)
     workbook.save(target_path)
     return target_path
+
+
+def add_row(
+    document_path: Path,
+    sheet_locator: str,
+    values: list[object],
+    output_path: Path | None = None,
+) -> tuple[Path, str]:
+    workbook = _open_workbook(document_path)
+    sheet_name = _sheet_name_from_locator(sheet_locator)
+    worksheet = _resolve_worksheet(workbook, sheet_name)
+    target_row = _last_used_row(worksheet) + 1
+    for column_index, value in enumerate(values, start=1):
+        worksheet.cell(row=target_row, column=column_index).value = _coerce_write_value(value)
+    target_path = _target_path(document_path, output_path)
+    workbook.save(target_path)
+    return target_path, f"xlsx:sheet:{sheet_name}:row:{target_row}"
 
 
 def append_cell(document_path: Path, item_id: str, text: str, output_path: Path | None = None) -> Path:
@@ -381,8 +432,8 @@ def append_row(
     document_path: Path,
     sheet_name: str,
     *,
-    values: list[str] | None = None,
-    record: dict[str, str] | None = None,
+    values: list[object] | None = None,
+    record: dict[str, object] | None = None,
     output_path: Path | None = None,
 ) -> tuple[Path, int, tuple[str, ...]]:
     if (values is None) == (record is None):
@@ -396,7 +447,7 @@ def append_row(
     if values is not None:
         for column_index, value in enumerate(values, start=1):
             coordinate = f"{get_column_letter(column_index)}{target_row}"
-            worksheet[coordinate] = _coerce_value(value)
+            worksheet[coordinate] = _coerce_write_value(value)
             written_coordinates.append(coordinate)
     else:
         header_map = _header_map(worksheet)
@@ -408,7 +459,7 @@ def append_row(
             if key not in header_map:
                 raise InvalidArgumentsError(f"Unknown worksheet header for append_row: {key}")
             coordinate = f"{get_column_letter(header_map[key])}{target_row}"
-            worksheet[coordinate] = _coerce_value(value)
+            worksheet[coordinate] = _coerce_write_value(value)
             written_coordinates.append(coordinate)
 
     target_path = _target_path(document_path, output_path)
@@ -420,8 +471,8 @@ def write_table(
     document_path: Path,
     sheet_name: str,
     *,
-    rows: list[list[str]] | None = None,
-    records: list[dict[str, str]] | None = None,
+    rows: list[list[object]] | None = None,
+    records: list[dict[str, object]] | None = None,
     column_mapping: dict[str, str] | None = None,
     output_path: Path | None = None,
 ) -> tuple[Path, int, int]:
@@ -435,7 +486,10 @@ def write_table(
     if rows is not None:
         for row_offset, row_values in enumerate(rows):
             for column_index, value in enumerate(row_values, start=1):
-                worksheet.cell(row=start_row + row_offset, column=column_index).value = _coerce_value(value)
+                worksheet.cell(
+                    row=start_row + row_offset,
+                    column=column_index,
+                ).value = _coerce_write_value(value)
         end_row = start_row + len(rows) - 1
     else:
         resolved_mapping = _resolve_record_mapping(worksheet, column_mapping)
@@ -446,7 +500,7 @@ def write_table(
                 worksheet.cell(
                     row=start_row + row_offset,
                     column=resolved_mapping[key],
-                ).value = _coerce_value(value)
+                ).value = _coerce_write_value(value)
         end_row = start_row + len(records) - 1
 
     target_path = _target_path(document_path, output_path)
@@ -471,6 +525,40 @@ def parse_item_id(item_id: str) -> tuple[str, str]:
 
 def make_item_id(sheet_name: str, coordinate: str) -> str:
     return f"sheet:{sheet_name}!{_normalize_coordinate(coordinate)}"
+
+
+def style_cell_inline(
+    document_path: Path,
+    locator: str,
+    style: InlineStyle,
+    clear_fields: list[str] | tuple[str, ...],
+    output_path: Path | None = None,
+) -> tuple[Path, str, dict[str, object]]:
+    workbook = _open_workbook(document_path)
+    canonical = to_v2_locator(locator, file_type="xlsx")
+    cell = _resolve_cell(workbook, _legacy_item_id_from_v2(canonical))
+    clear_set = _normalize_clear_fields(clear_fields, _INLINE_STYLE_FIELDS)
+    skipped_fields = _apply_xlsx_inline_style(cell, style, clear_set)
+    target_path = _target_path(document_path, output_path)
+    workbook.save(target_path)
+    return target_path, canonical, {"cleared_fields": clear_set, "skipped_fields": skipped_fields}
+
+
+def style_cell_block(
+    document_path: Path,
+    locator: str,
+    style: BlockStyle,
+    clear_fields: list[str] | tuple[str, ...],
+    output_path: Path | None = None,
+) -> tuple[Path, str, dict[str, object]]:
+    workbook = _open_workbook(document_path)
+    canonical = to_v2_locator(locator, file_type="xlsx")
+    cell = _resolve_cell(workbook, _legacy_item_id_from_v2(canonical))
+    clear_set = _normalize_clear_fields(clear_fields, _BLOCK_STYLE_FIELDS)
+    skipped_fields = _apply_xlsx_block_style(cell, style, clear_set)
+    target_path = _target_path(document_path, output_path)
+    workbook.save(target_path)
+    return target_path, canonical, {"cleared_fields": clear_set, "skipped_fields": skipped_fields}
 
 
 def _open_workbook(document_path: Path):
@@ -532,6 +620,12 @@ def _coerce_value(value: str) -> object:
     return value
 
 
+def _coerce_write_value(value: object) -> object:
+    if isinstance(value, str):
+        return _coerce_value(value)
+    return value
+
+
 def _normalize_coordinate(coordinate: str) -> str:
     normalized = coordinate.strip().upper()
     if not normalized:
@@ -555,6 +649,188 @@ def _context_text(entries: list[tuple[str, str]], *, exclude: str) -> str:
 
 def _target_path(document_path: Path, output_path: Path | None) -> Path:
     return document_path if output_path is None else output_path
+
+
+def _sheet_name_from_locator(locator: str) -> str:
+    canonical = to_v2_locator(locator, file_type="xlsx")
+    components = parse_locator(canonical).components
+    if len(components) == 3 and components[:2] == ("xlsx", "sheet"):
+        return components[2]
+    raise InvalidArgumentsError(f"Unsupported worksheet locator: {locator}")
+
+
+def _legacy_item_id_from_v2(locator: str) -> str:
+    components = parse_locator(locator).components
+    if len(components) == 4 and components[:2] == ("xlsx", "sheet"):
+        return make_item_id(components[2], components[3])
+    raise InvalidArgumentsError(f"XLSX cell locator required: {locator}")
+
+
+_INLINE_STYLE_FIELDS = frozenset(
+    {
+        "bold",
+        "italic",
+        "underline",
+        "strike",
+        "font_name",
+        "font_size",
+        "font_color",
+        "highlight",
+    }
+)
+_BLOCK_STYLE_FIELDS = frozenset(
+    {
+        "alignment",
+        "indent_level",
+        "left_indent",
+        "right_indent",
+        "spacing_before",
+        "spacing_after",
+        "line_spacing",
+        "wrap_text",
+        "vertical_alignment",
+        "fill_color",
+        "number_format",
+    }
+)
+_XLSX_ALIGNMENT_MAP = {
+    "left": "left",
+    "center": "center",
+    "right": "right",
+    "justify": "justify",
+}
+_XLSX_VERTICAL_ALIGNMENT_MAP = {
+    "top": "top",
+    "center": "center",
+    "bottom": "bottom",
+}
+
+
+def _normalize_clear_fields(
+    clear_fields: list[str] | tuple[str, ...],
+    allowed: frozenset[str],
+) -> tuple[str, ...]:
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for field_name in clear_fields:
+        if field_name not in allowed:
+            raise InvalidArgumentsError(f"Unknown style field in clear_fields: {field_name}")
+        if field_name not in seen:
+            normalized.append(field_name)
+            seen.add(field_name)
+    return tuple(normalized)
+
+
+def _apply_xlsx_inline_style(cell, style: InlineStyle, clear_fields: tuple[str, ...]) -> list[str]:
+    font = copy(cell.font)
+    clear_set = set(clear_fields)
+    skipped_fields: list[str] = []
+
+    if "bold" in clear_set:
+        font.bold = None
+    elif style.bold is not None:
+        font.bold = style.bold
+
+    if "italic" in clear_set:
+        font.italic = None
+    elif style.italic is not None:
+        font.italic = style.italic
+
+    if "underline" in clear_set:
+        font.underline = None
+    elif style.underline is not None:
+        font.underline = "single" if style.underline else None
+
+    if "strike" in clear_set:
+        font.strike = None
+    elif style.strike is not None:
+        font.strike = style.strike
+
+    if "font_name" in clear_set:
+        font.name = None
+    elif style.font_name is not None:
+        font.name = style.font_name
+
+    if "font_size" in clear_set:
+        font.sz = None
+    elif style.font_size is not None:
+        font.sz = style.font_size
+
+    if "font_color" in clear_set:
+        font.color = None
+    elif style.font_color is not None:
+        font.color = _normalize_hex_color(style.font_color)
+
+    if style.highlight is not None or "highlight" in clear_set:
+        skipped_fields.append("highlight")
+
+    cell.font = font
+    return skipped_fields
+
+
+def _apply_xlsx_block_style(cell, style: BlockStyle, clear_fields: tuple[str, ...]) -> list[str]:
+    alignment = copy(cell.alignment)
+    clear_set = set(clear_fields)
+    skipped_fields: list[str] = []
+
+    if "alignment" in clear_set:
+        alignment.horizontal = None
+    elif style.alignment is not None:
+        alignment.horizontal = _xlsx_alignment_value(style.alignment)
+
+    if "wrap_text" in clear_set:
+        alignment.wrap_text = None
+    elif style.wrap_text is not None:
+        alignment.wrap_text = style.wrap_text
+
+    if "vertical_alignment" in clear_set:
+        alignment.vertical = None
+    elif style.vertical_alignment is not None:
+        alignment.vertical = _xlsx_vertical_alignment_value(style.vertical_alignment)
+
+    if "indent_level" in clear_set:
+        alignment.indent = 0
+    elif style.indent_level is not None:
+        alignment.indent = style.indent_level
+
+    for field_name in ("left_indent", "right_indent", "spacing_before", "spacing_after", "line_spacing"):
+        if getattr(style, field_name) is not None or field_name in clear_set:
+            skipped_fields.append(field_name)
+
+    if "fill_color" in clear_set:
+        cell.fill = PatternFill(fill_type=None)
+    elif style.fill_color is not None:
+        color = _normalize_hex_color(style.fill_color)
+        cell.fill = PatternFill(fill_type="solid", start_color=color, end_color=color)
+
+    if "number_format" in clear_set:
+        cell.number_format = "General"
+    elif style.number_format is not None:
+        cell.number_format = style.number_format
+
+    cell.alignment = alignment
+    return skipped_fields
+
+
+def _normalize_hex_color(value: str) -> str:
+    normalized = value.strip().lstrip("#").upper()
+    if len(normalized) != 6 or any(character not in "0123456789ABCDEF" for character in normalized):
+        raise InvalidArgumentsError(f"Invalid RGB hex color: {value}")
+    return normalized
+
+
+def _xlsx_alignment_value(raw: str) -> str:
+    normalized = raw.strip().lower()
+    if normalized not in _XLSX_ALIGNMENT_MAP:
+        raise InvalidArgumentsError(f"Unsupported XLSX alignment: {raw}")
+    return _XLSX_ALIGNMENT_MAP[normalized]
+
+
+def _xlsx_vertical_alignment_value(raw: str) -> str:
+    normalized = raw.strip().lower()
+    if normalized not in _XLSX_VERTICAL_ALIGNMENT_MAP:
+        raise InvalidArgumentsError(f"Unsupported XLSX vertical alignment: {raw}")
+    return _XLSX_VERTICAL_ALIGNMENT_MAP[normalized]
 
 
 def _is_text_like_item(item: IndexedItem) -> bool:
