@@ -7,6 +7,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from offagent.app.services import IndexSummary, OutputMode, PatchResult
 from offagent.domain.models import (
+    BatchResult,
+    ChildSummary,
     DocxRun,
     DocxTableCell,
     DocxTableEntry,
@@ -17,8 +19,10 @@ from offagent.domain.models import (
     FileType,
     InsertContentResult,
     ItemRef,
+    MutationResult,
     NodePayload,
     NodeWriteResult,
+    ObjectPayload,
     ParagraphCollection,
     PptxTextBlockNode,
     SearchHit,
@@ -90,7 +94,6 @@ class SearchHitModel(MCPModel):
     preview: str
     document_path: str | None = None
     display_name: str | None = None
-    match_mode: str | None = None
     scores: dict[str, float] | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -103,6 +106,37 @@ class SearchHitModel(MCPModel):
             matched_text=hit.matched_text,
             locator=hit.locator,
             item_type=hit.item_type,
+            preview=hit.preview,
+            document_path=None if hit.document_path is None else str(hit.document_path),
+            display_name=hit.display_name,
+            scores=hit.scores,
+            metadata=hit.metadata,
+        )
+
+
+class SearchObjectHitModel(MCPModel):
+    document_id: str
+    item_id: str
+    score: float
+    matched_text: str
+    locator: str
+    object_type: str
+    preview: str
+    document_path: str | None = None
+    display_name: str | None = None
+    match_mode: str | None = None
+    scores: dict[str, float] | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @classmethod
+    def from_search_hit(cls, hit: SearchHit) -> "SearchObjectHitModel":
+        return cls(
+            document_id=hit.document_id,
+            item_id=hit.item_id,
+            score=hit.score,
+            matched_text=hit.matched_text,
+            locator=hit.locator,
+            object_type=hit.item_type,
             preview=hit.preview,
             document_path=None if hit.document_path is None else str(hit.document_path),
             display_name=hit.display_name,
@@ -176,6 +210,14 @@ class SearchDocumentsResult(MCPModel):
         return cls(hits=[SearchHitModel.from_search_hit(hit) for hit in hits])
 
 
+class SearchObjectsResult(MCPModel):
+    hits: list[SearchObjectHitModel]
+
+    @classmethod
+    def from_hits(cls, hits: list[SearchHit]) -> "SearchObjectsResult":
+        return cls(hits=[SearchObjectHitModel.from_search_hit(hit) for hit in hits])
+
+
 class WriteResult(MCPModel):
     document_path: str
     output_path: str
@@ -206,6 +248,154 @@ class SearchDocumentsRequest(MCPModel):
     document_id: str | None = None
     mode: SearchMode = "keyword"
     limit: int = Field(default=20, ge=1, le=100)
+
+
+class GetObjectRequest(MCPModel):
+    document_id: str = Field(min_length=1)
+    locator: str = Field(min_length=1)
+
+
+class ListChildrenRequest(MCPModel):
+    document_id: str = Field(min_length=1)
+    locator: str = Field(min_length=1)
+    child_type: str | None = None
+    limit: int | None = Field(default=None, ge=1, le=1000)
+
+
+class CreateObjectRequest(MCPModel):
+    document_id: str = Field(min_length=1)
+    parent_locator: str = Field(min_length=1)
+    object_type: str = Field(min_length=1)
+    properties: dict[str, Any] = Field(default_factory=dict)
+    position: Any | None = None
+    output_mode: OutputMode = "versioned"
+
+
+class UpdateObjectRequest(MCPModel):
+    document_id: str = Field(min_length=1)
+    locator: str = Field(min_length=1)
+    properties: dict[str, Any] = Field(default_factory=dict)
+    output_mode: OutputMode = "versioned"
+
+
+class MoveObjectRequest(MCPModel):
+    document_id: str = Field(min_length=1)
+    locator: str = Field(min_length=1)
+    new_parent_locator: str = Field(min_length=1)
+    position: Any | None = None
+    output_mode: OutputMode = "versioned"
+
+
+class CopyObjectRequest(MCPModel):
+    document_id: str = Field(min_length=1)
+    locator: str = Field(min_length=1)
+    target_parent_locator: str = Field(min_length=1)
+    position: Any | None = None
+    output_mode: OutputMode = "versioned"
+
+
+class BatchEditRequest(MCPModel):
+    document_id: str = Field(min_length=1)
+    operations: list[dict[str, Any]] = Field(min_length=1)
+    output_mode: OutputMode = "versioned"
+    dry_run: bool = False
+
+
+class DeleteObjectRequest(MCPModel):
+    document_id: str = Field(min_length=1)
+    locator: str = Field(min_length=1)
+    output_mode: OutputMode = "versioned"
+
+
+class DocxSetParagraphStyleRequest(MCPModel):
+    document_id: str = Field(min_length=1)
+    locator: str = Field(min_length=1)
+    style_name: str = Field(min_length=1)
+    output_mode: OutputMode = "versioned"
+
+
+class DocxInsertPageBreakRequest(MCPModel):
+    document_id: str = Field(min_length=1)
+    locator: str = Field(min_length=1)
+    output_mode: OutputMode = "versioned"
+
+
+class DocxAddTableRequest(MCPModel):
+    document_id: str = Field(min_length=1)
+    row_count: int = Field(ge=1)
+    column_count: int = Field(ge=1)
+    position: Any | None = None
+    column_widths: list[int] | None = None
+    style_name: str | None = None
+    output_mode: OutputMode = "versioned"
+
+
+class DocxMergeTableCellsRequest(MCPModel):
+    document_id: str = Field(min_length=1)
+    start_locator: str = Field(min_length=1)
+    end_locator: str = Field(min_length=1)
+    output_mode: OutputMode = "versioned"
+
+
+class PptxAddSlideRequest(MCPModel):
+    document_id: str = Field(min_length=1)
+    layout_index: int | None = Field(default=None, ge=0)
+    layout_name: str | None = None
+    output_mode: OutputMode = "versioned"
+
+
+class PptxDuplicateSlideRequest(MCPModel):
+    document_id: str = Field(min_length=1)
+    locator: str = Field(min_length=1)
+    position: int | None = Field(default=None, ge=1)
+    output_mode: OutputMode = "versioned"
+
+
+class PptxSetSlideLayoutRequest(MCPModel):
+    document_id: str = Field(min_length=1)
+    locator: str = Field(min_length=1)
+    layout_index: int | None = Field(default=None, ge=0)
+    layout_name: str | None = None
+    output_mode: OutputMode = "versioned"
+
+
+class PptxAddTextShapeRequest(MCPModel):
+    document_id: str = Field(min_length=1)
+    locator: str = Field(min_length=1)
+    text: str
+    left: int
+    top: int
+    width: int = Field(ge=1)
+    height: int = Field(ge=1)
+    output_mode: OutputMode = "versioned"
+
+
+class XlsxWriteRangeRequest(MCPModel):
+    document_id: str = Field(min_length=1)
+    locator: str = Field(min_length=1)
+    values: list[list[Any]] = Field(min_length=1)
+    output_mode: OutputMode = "versioned"
+
+
+class XlsxInsertColumnsRequest(MCPModel):
+    document_id: str = Field(min_length=1)
+    locator: str = Field(min_length=1)
+    column_index: int = Field(ge=1)
+    count: int = Field(ge=1)
+    output_mode: OutputMode = "versioned"
+
+
+class XlsxSetFormulaRequest(MCPModel):
+    document_id: str = Field(min_length=1)
+    locator: str = Field(min_length=1)
+    formula: str = Field(min_length=1)
+    output_mode: OutputMode = "versioned"
+
+
+class XlsxMergeCellsRequest(MCPModel):
+    document_id: str = Field(min_length=1)
+    locator: str = Field(min_length=1)
+    output_mode: OutputMode = "versioned"
 
 
 class SemanticDocumentRequest(MCPModel):
@@ -240,9 +430,12 @@ class InsertContentRequest(MCPModel):
 
 class XlsxInsertRowsRequest(MCPModel):
     document_id: str = Field(min_length=1)
-    sheet_name: str = Field(min_length=1)
+    sheet_name: str | None = None
     rows: list[list[str]] | None = None
     records: list[dict[str, str]] | None = None
+    locator: str | None = None
+    row_number: int | None = Field(default=None, ge=1)
+    count: int | None = Field(default=None, ge=1)
     output_mode: OutputMode = "versioned"
 
 
@@ -379,6 +572,58 @@ class GetSectionResult(MCPModel):
         )
 
 
+class ChildSummaryModel(MCPModel):
+    locator: str
+    object_type: str
+    preview: str
+    capabilities: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @classmethod
+    def from_domain(cls, result: ChildSummary) -> "ChildSummaryModel":
+        return cls(
+            locator=result.locator,
+            object_type=result.object_type,
+            preview=result.preview,
+            capabilities=[capability.value for capability in result.capabilities],
+            metadata=result.metadata,
+        )
+
+
+class GetObjectResult(MCPModel):
+    document: DocumentModel
+    locator: str
+    object_type: str
+    preview: str
+    properties: dict[str, Any] = Field(default_factory=dict)
+    capabilities: list[str] = Field(default_factory=list)
+    parent_locator: str | None = None
+    child_summary: list[ChildSummaryModel] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @classmethod
+    def from_domain(cls, result: ObjectPayload) -> "GetObjectResult":
+        return cls(
+            document=DocumentModel.from_document_ref(result.document),
+            locator=result.locator,
+            object_type=result.object_type,
+            preview=result.preview,
+            properties=result.properties,
+            capabilities=[capability.value for capability in result.capabilities],
+            parent_locator=result.parent_locator,
+            child_summary=[ChildSummaryModel.from_domain(child) for child in result.child_summary],
+            metadata=result.metadata,
+        )
+
+
+class ListChildrenResult(MCPModel):
+    children: list[ChildSummaryModel]
+
+    @classmethod
+    def from_domain(cls, result: list[ChildSummary]) -> "ListChildrenResult":
+        return cls(children=[ChildSummaryModel.from_domain(child) for child in result])
+
+
 class GetNodeResult(MCPModel):
     document_id: str
     node_id: str
@@ -428,8 +673,14 @@ class InsertContentResultModel(MCPModel):
 class XlsxInsertRowsResultModel(MCPModel):
     document_id: str
     output_path: str
-    rows_inserted: int
-    first_row_locator: str
+    rows_inserted: int | None = None
+    first_row_locator: str | None = None
+    locator: str | None = None
+    object_type: str | None = None
+    summary: str | None = None
+    capabilities: list[str] = Field(default_factory=list)
+    parent_locator: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
     @classmethod
     def from_domain(cls, result: XlsxInsertRowsResult) -> "XlsxInsertRowsResultModel":
@@ -438,6 +689,63 @@ class XlsxInsertRowsResultModel(MCPModel):
             output_path=str(result.output_path),
             rows_inserted=result.rows_inserted,
             first_row_locator=result.first_row_locator,
+        )
+
+    @classmethod
+    def from_mutation_result(cls, result: MutationResult) -> "XlsxInsertRowsResultModel":
+        return cls(
+            document_id=result.document_id,
+            output_path="" if result.output_path is None else str(result.output_path),
+            locator=result.locator,
+            object_type=result.object_type,
+            summary=result.summary,
+            capabilities=[capability.value for capability in result.capabilities],
+            parent_locator=result.parent_locator,
+            metadata=result.metadata,
+        )
+
+
+class MutationResultModel(MCPModel):
+    document_id: str
+    output_path: str | None = None
+    locator: str | None = None
+    object_type: str
+    summary: str
+    capabilities: list[str] = Field(default_factory=list)
+    parent_locator: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @classmethod
+    def from_domain(cls, result: MutationResult) -> "MutationResultModel":
+        return cls(
+            document_id=result.document_id,
+            output_path=None if result.output_path is None else str(result.output_path),
+            locator=result.locator,
+            object_type=result.object_type,
+            summary=result.summary,
+            capabilities=[capability.value for capability in result.capabilities],
+            parent_locator=result.parent_locator,
+            metadata=result.metadata,
+        )
+
+
+class BatchResultModel(MCPModel):
+    document_id: str
+    output_path: str | None = None
+    summary: str
+    dry_run: bool = False
+    operations: list[MutationResultModel] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @classmethod
+    def from_domain(cls, result: BatchResult) -> "BatchResultModel":
+        return cls(
+            document_id=result.document_id,
+            output_path=None if result.output_path is None else str(result.output_path),
+            summary=result.summary,
+            dry_run=result.dry_run,
+            operations=[MutationResultModel.from_domain(operation) for operation in result.operations],
+            metadata=result.metadata,
         )
 
 

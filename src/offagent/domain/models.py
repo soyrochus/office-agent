@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import StrEnum
 from pathlib import Path
 from typing import Any, Literal
 
@@ -8,6 +9,16 @@ FileType = Literal["docx", "pptx", "xlsx"]
 OperationType = Literal["replace_text", "append_text", "write_value"]
 SearchMode = Literal["keyword", "semantic", "hybrid"]
 MatchMode = Literal["keyword", "semantic", "hybrid"]
+
+
+class Capability(StrEnum):
+    READ = "read"
+    UPDATE = "update"
+    DELETE = "delete"
+    ADD_CHILD = "add_child"
+    MOVE = "move"
+    COPY = "copy"
+    STYLE = "style"
 
 
 @dataclass(frozen=True)
@@ -370,3 +381,49 @@ class DocxTableEntry:
 class DocxTablesResult:
     document: DocumentRef
     tables: tuple[DocxTableEntry, ...]
+
+
+@dataclass(frozen=True)
+class ChildSummary:
+    locator: str
+    object_type: str
+    preview: str
+    capabilities: tuple[Capability, ...] = ()
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ObjectPayload:
+    document: DocumentRef
+    locator: str
+    object_type: str
+    preview: str
+    properties: dict[str, Any] = field(default_factory=dict)
+    capabilities: tuple[Capability, ...] = ()
+    parent_locator: str | None = None
+    child_summary: tuple[ChildSummary, ...] = ()
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class MutationResult:
+    document_path: Path
+    output_path: Path | None
+    document_id: str
+    locator: str | None
+    object_type: str
+    summary: str
+    capabilities: tuple[Capability, ...] = ()
+    parent_locator: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class BatchResult:
+    document_path: Path
+    output_path: Path | None
+    document_id: str
+    summary: str
+    dry_run: bool = False
+    operations: tuple[MutationResult, ...] = ()
+    metadata: dict[str, Any] = field(default_factory=dict)

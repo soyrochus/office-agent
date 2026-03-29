@@ -53,14 +53,35 @@ def test_mcp_acceptance_surface(golden_config_path, golden_docx, golden_xlsx, go
                 "index_documents",
                 "refresh_document",
                 "list_documents",
+                "search_objects",
                 "search_documents",
                 "get_structure",
                 "get_section",
+                "get_object",
+                "list_children",
                 "get_node",
                 "write_node",
+                "create_object",
+                "update_object",
+                "move_object",
+                "copy_object",
+                "batch_edit",
+                "delete_object",
                 "insert_content",
                 "xlsx_insert_rows",
+                "xlsx_write_range",
+                "xlsx_insert_columns",
+                "xlsx_set_formula",
+                "xlsx_merge_cells",
                 "docx_get_tables",
+                "docx_set_paragraph_style",
+                "docx_insert_page_break",
+                "docx_add_table",
+                "docx_merge_table_cells",
+                "pptx_add_slide",
+                "pptx_duplicate_slide",
+                "pptx_set_slide_layout",
+                "pptx_add_text_shape",
             }
             assert all(tool.inputSchema is not None for tool in tool_map.values())
             assert all(tool.outputSchema is not None for tool in tool_map.values())
@@ -259,7 +280,17 @@ def test_mcp_acceptance_semantic_surface(
     def scenario(session: ClientSession):
         async def run():
             tools = await session.list_tools()
-            assert len(tools.tools) == 11
+            tool_names = {tool.name for tool in tools.tools}
+            assert {
+                "index_documents",
+                "list_documents",
+                "get_structure",
+                "get_section",
+                "search_documents",
+                "search_objects",
+                "get_object",
+                "list_children",
+            } <= tool_names
 
             await _call_tool(session, "index_documents", {"paths": [str(docs_dir)]})
             documents_result = await _call_tool(session, "list_documents")

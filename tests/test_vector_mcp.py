@@ -34,21 +34,21 @@ async def _call_tool(session: ClientSession, name: str, arguments: dict | None =
     return result.structuredContent
 
 
-def test_mcp_search_documents_supports_mode(golden_config_path, golden_docx) -> None:
+def test_mcp_search_objects_supports_mode(golden_config_path, golden_docx) -> None:
     services = AppServices(load_config(golden_config_path))
     services.index_document(golden_docx, with_embeddings=True)
 
     def scenario(session: ClientSession):
         async def run():
             tools = await session.list_tools()
-            search_tool = next(tool for tool in tools.tools if tool.name == "search_documents")
+            search_tool = next(tool for tool in tools.tools if tool.name == "search_objects")
             assert "mode" in search_tool.inputSchema["properties"]
 
             documents_result = await _call_tool(session, "list_documents")
             document = documents_result["documents"][0]
             semantic = await _call_tool(
                 session,
-                "search_documents",
+                "search_objects",
                 {
                     "query": "supplier shall",
                     "file_type": "docx",
@@ -58,7 +58,7 @@ def test_mcp_search_documents_supports_mode(golden_config_path, golden_docx) -> 
             )
             hybrid = await _call_tool(
                 session,
-                "search_documents",
+                "search_objects",
                 {
                     "query": "supplier shall",
                     "file_type": "docx",
@@ -76,3 +76,29 @@ def test_mcp_search_documents_supports_mode(golden_config_path, golden_docx) -> 
     assert "semantic" in result["semantic"]["hits"][0]["scores"]
     assert result["hybrid"]["hits"][0]["match_mode"] == "hybrid"
     assert "final" in result["hybrid"]["hits"][0]["scores"]
+
+
+def test_mcp_search_documents_alias_preserves_pre_v2_shape(golden_config_path, golden_docx) -> None:
+    services = AppServices(load_config(golden_config_path))
+    services.index_document(golden_docx, with_embeddings=True)
+
+    def scenario(session: ClientSession):
+        async def run():
+            alias_result = await _call_tool(
+                session,
+                "search_documents",
+                {
+                    "query": "supplier shall",
+                    "file_type": "docx",
+                    "mode": "semantic",
+                },
+            )
+            return alias_result["hits"][0]
+
+        return run()
+
+    hit = _run_mcp(golden_config_path, scenario)
+
+    assert "match_mode" not in hit
+    assert "object_type" not in hit
+    assert hit["item_type"] == "paragraph"
