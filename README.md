@@ -75,7 +75,20 @@ Office-Agent supports local-first workflows for `.docx`, `.pptx`, and `.xlsx` do
 
 ## Installation
 
-The project uses `uv` in development.
+Install [the package from Pypi](https://pypi.org/project/offagent/) with:
+
+```bash
+uv install offagent
+```
+
+and running it straight from Pypi:
+
+```bash
+uvx offagent
+```
+
+
+The project uses `uv` for development as well. To install all of the dependencies.
 
 ```bash
 uv sync

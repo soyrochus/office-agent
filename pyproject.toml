@@ -1,13 +1,13 @@
-[build-system]
-requires = ["setuptools>=69"]
-build-backend = "setuptools.build_meta"
-
 [project]
 name = "offagent"
-version = "0.1.0"
+version = "0.10.1"
 description = "Local-first Office document tooling with a shared CLI and MCP-ready core"
 readme = "README.md"
 requires-python = ">=3.13"
+license = { text = "MIT" }
+authors = [
+  { name = "Iwan van der Kleijn" }
+]
 dependencies = [
   "fastembed>=0.3,<1",
   "mcp>=1,<2",
@@ -20,8 +20,17 @@ dependencies = [
   "typer>=0.12,<1",
 ]
 
+[project.urls]
+Homepage = "https://github.com/soyrochus/office-agent"
+Repository = "https://github.com/soyrochus/office-agent"
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
 [project.scripts]
 office-agent = "offagent.interfaces.cli:main"
+offagent = "offagent.interfaces.cli:main"
 
 [dependency-groups]
 dev = [
