@@ -7,96 +7,71 @@
 
 Office-Agent (`offagent`) is a local-first Office document tool with a shared application core and a CLI entrypoint, `office-agent`.
 
+Detailed technical implementation notes are available in [technical-implementation.md](./technical-implementation.md).
+
 ![Office Agent](./images/office-agent-small.png)
 
-The project is being built incrementally. The current implementation includes:
-
-- project configuration and environment diagnostics
-- allowed-root and output-root path guards for read and write workflows
-- a local SQLite + FTS5 index
-- optional embedding-backed semantic and hybrid search over indexed items
-- DOCX paragraph extraction and indexing
-- DOCX search, locate, read, replace, and append operations
-- PPTX text-shape extraction and indexing
-- PPTX search, locate, read, replace, and append operations
-- XLSX cell extraction and indexing
-- XLSX search, locate, read, write-cell, and guarded append operations
-- indexed document summaries with `list` and `show`
-- shared human-readable, JSON, and quiet CLI output modes
-- versioned write outputs with automatic reindexing
-- stale-locator detection for write commands
-- an MCP server over stdio implemented with FastMCP
-
-Current scope is intentionally narrow. DOCX, PPTX, and XLSX are the currently implemented document formats. The MCP surface currently supports stdio transport only.
+Office-Agent supports local-first workflows for `.docx`, `.pptx`, and `.xlsx` documents through both a CLI and an MCP server. The app indexes document structure into a local SQLite + FTS5 store, can optionally persist embeddings for semantic and hybrid retrieval, and routes all reads and writes through one shared service layer with path-policy enforcement, stale-locator checks, versioned outputs, and automatic reindexing.
 
 ## Current Features
 
-### Base App
+### Core App
 
-- `office-agent doctor` checks required imports, SQLite availability, FTS5 support, index path writability, configured document roots, and configured path-policy roots
-- configuration loads from a TOML file with environment variable overrides
-- Office file discovery supports `.docx`, `.pptx`, and `.xlsx` roots at the base layer
-- allowed-root policy protects index, show, locate, read, and search-by-document workflows
-- output-root policy protects versioned and in-place write targets
-- optional embedding generation can be enabled during indexing and reindexing
-- search supports `keyword`, `semantic`, and `hybrid` modes; `keyword` remains the default
-- write commands default to versioned output files and automatic reindexing
+- TOML configuration with environment variable overrides
+- `office-agent doctor` runtime checks for imports, SQLite, FTS5, index writability, configured roots, and vector-search readiness
+- document discovery and indexing for `.docx`, `.pptx`, and `.xlsx`
+- allowed-root guards for indexed reads and output-root guards for writes
+- human-readable, JSON, and quiet CLI output modes
+- default versioned write outputs, with optional in-place overwrite when explicitly enabled
+- keyword, semantic, and hybrid search modes over indexed content
 
-### DOCX Workflow
+### Structured Document Model
 
-- index a `.docx` file or a directory of `.docx` files
-- reindex a changed `.docx` file
-- search indexed DOCX paragraph content through SQLite FTS5
-- locate a paragraph directly by paragraph number
-- read the current paragraph text from the source document
-- replace a paragraph while preserving the first run's character formatting
-- append text to the last run of a paragraph, or create a run for an empty paragraph
-- write versioned output files by default, with optional in-place overwrite when explicitly enabled
+- typed locators for DOCX, PPTX, and XLSX objects, with legacy locator compatibility where needed
+- object traversal with `get_object` and `list_children`
+- per-object capability reporting for `read`, `update`, `delete`, `add_child`, `move`, `copy`, and `style`
+- generic object lifecycle operations: `create_object`, `update_object`, `move_object`, `copy_object`, `batch_edit`, and `delete_object`
+- stale-locator detection across object and node workflows
 
-DOCX indexing uses paragraph-level item ids in the form `para:<n>`. Empty paragraphs are included so paragraph numbering stays stable.
+### DOCX Support
 
-### PPTX Workflow
+- paragraph, run, section, table, table row, table cell, image, and page-break object resolution
+- paragraph-level indexing and search with stable `para:<n>` compatibility
+- node reads and writes for paragraphs and table cells
+- paragraph insertion through the existing content-insert workflow
+- DOCX escape hatches for paragraph style changes, page-break insertion, table creation, and table-cell merging
 
-- index a `.pptx` file or a directory of supported Office files
-- search indexed PowerPoint text-frame content through SQLite FTS5
-- locate editable text-bearing shapes by slide number, with optional shape id narrowing
-- read the current text-frame content from the source presentation
-- replace the full text-frame content of one shape
-- append text to an existing editable text frame
-- write versioned output files by default, with optional in-place overwrite when explicitly enabled
+### PPTX Support
 
-PPTX indexing uses shape-level item ids in the form `slide:<n>:shape:<id>`. Only shapes with text frames are indexed. Tables, charts, images, SmartArt, and other non-text shapes are excluded, and PPTX write attempts to those targets fail with `target not editable`.
+- presentation, slide, notes, shape, text shape, image shape, table, table row, table cell, and group-shape object resolution
+- text-frame indexing and search with `slide:<n>:shape:<id>` compatibility
+- node reads and writes for editable text-bearing targets
+- slide move and copy operations through the generic object layer
+- PPTX escape hatches for adding slides, duplicating slides, changing slide layouts, and inserting text shapes
 
-### XLSX Workflow
+### XLSX Support
 
-- index an `.xlsx` file or a directory of supported Office files
-- reindex a changed `.xlsx` file
-- search indexed workbook cell content through SQLite FTS5
-- generate contextual embedding text for indexed cells when embedding indexing is enabled
-- locate a cell directly by worksheet name and coordinate
-- read the current cell value or formula text from the source workbook
-- write one cell value directly with `write-cell`
-- append text only to empty or string-compatible cells
-- write versioned output files by default, with optional in-place overwrite when explicitly enabled
-
-XLSX indexing uses cell-level item ids in the form `sheet:<name>!<coordinate>`. Only non-empty cells are indexed. Formula cells are indexed by formula text, and append attempts to numeric or formula cells fail with an error directing the user to `write-cell`.
+- workbook, worksheet, row, column, cell, range, table, merged range, formula cell, and named-range object resolution
+- cell-level indexing and search with `sheet:<name>!<coordinate>` compatibility
+- direct cell writes plus guarded append semantics for string-compatible cells
+- generic object deletion for worksheets, rows, columns, cells, and ranges where supported
+- XLSX escape hatches for range writes, row insertion, column insertion, formula writes, and cell merging
 
 ### MCP Server
 
-- start the MCP server with `office-agent mcp`
-- stdio transport is implemented for MCP-compatible clients
-- exposed MCP tools are `index_documents`, `refresh_document`, `list_documents`, `search_documents`, `locate_item`, `read_item`, `replace_text`, `append_text`, and `write_cell`
-- MCP requests reuse the shared application configuration and service layer rather than duplicating document logic
-- MCP responses are structured, and expected service failures are returned as MCP tool errors
+- stdio MCP server implemented with FastMCP
+- document indexing and refresh tools
+- canonical V2 search via `search_objects`, with deprecated `search_documents` alias compatibility
+- structure and section tools, node read/write tools, object traversal tools, generic object mutation tools, and format-specific escape hatches
+- structured MCP responses backed by the same application services used by the CLI
 
 ### Vector Search
 
-- index and reindex can optionally generate one embedding per indexed item with `--with-embeddings`
-- embeddings are stored in SQLite sidecar tables keyed by the existing indexed item identity
-- semantic search embeds the query and compares it against stored vectors
-- hybrid search merges FTS hits and semantic hits with deterministic weighted ranking
-- search results include `match_mode` and per-source `scores` metadata in JSON and MCP output
-- `office-agent doctor` verifies embedding-provider importability, model loadability, and embedding-store consistency
+- optional embedding generation during indexing and reindexing
+- SQLite-backed embedding side tables keyed to indexed document items
+- semantic retrieval over stored vectors
+- hybrid retrieval that combines keyword and semantic scores
+- `match_mode` and per-source score metadata in JSON and MCP search results
 
 ## Installation
 
@@ -411,12 +386,35 @@ The MCP server exposes these tools:
 - `index_documents(paths)`
 - `refresh_document(document_id)`
 - `list_documents()`
-- `search_documents(query, file_type=None, document_id=None, mode="keyword", limit=20)`
-- `locate_item(document_id, locator)`
-- `read_item(document_id, item_id)`
-- `replace_text(document_id, item_id, new_text, output_mode="versioned")`
-- `append_text(document_id, item_id, text_to_add, output_mode="versioned")`
-- `write_cell(document_id, sheet, cell, value, output_mode="versioned")`
+- `search_objects(query, file_type=None, document_id=None, mode="keyword", limit=20)`
+- `search_documents(...)` as a deprecated alias for pre-V2 consumers
+- `get_structure(document_id)`
+- `get_section(document_id, section_id, cell_range=None)`
+- `get_node(document_id, node_id)`
+- `write_node(document_id, node_id, content, output_mode="versioned")`
+- `insert_content(document_id, content, style_name=None, after_node_id=None, output_mode="versioned")`
+- `docx_get_tables(document_id)`
+- `get_object(document_id, locator)`
+- `list_children(document_id, locator, child_type=None, limit=None)`
+- `create_object(document_id, parent_locator, object_type, properties, position=None, output_mode="versioned")`
+- `update_object(document_id, locator, properties, output_mode="versioned")`
+- `move_object(document_id, locator, new_parent_locator, position=None, output_mode="versioned")`
+- `copy_object(document_id, locator, target_parent_locator, position=None, output_mode="versioned")`
+- `batch_edit(document_id, operations, output_mode="versioned", dry_run=False)`
+- `delete_object(document_id, locator, output_mode="versioned")`
+- `docx_set_paragraph_style(document_id, locator, style_name, output_mode="versioned")`
+- `docx_insert_page_break(document_id, locator, output_mode="versioned")`
+- `docx_add_table(document_id, row_count, column_count, position=None, column_widths=None, style_name=None, output_mode="versioned")`
+- `docx_merge_table_cells(document_id, start_locator, end_locator, output_mode="versioned")`
+- `pptx_add_slide(document_id, layout_index=None, layout_name=None, output_mode="versioned")`
+- `pptx_duplicate_slide(document_id, locator, position=None, output_mode="versioned")`
+- `pptx_set_slide_layout(document_id, locator, layout_index=None, layout_name=None, output_mode="versioned")`
+- `pptx_add_text_shape(document_id, locator, text, left, top, width, height, output_mode="versioned")`
+- `xlsx_write_range(document_id, locator, values, output_mode="versioned")`
+- `xlsx_insert_rows(...)` for both append-rows compatibility mode and worksheet row insertion mode
+- `xlsx_insert_columns(document_id, locator, column_index, count, output_mode="versioned")`
+- `xlsx_set_formula(document_id, locator, formula, output_mode="versioned")`
+- `xlsx_merge_cells(document_id, locator, output_mode="versioned")`
 
 ## Example query session
 
