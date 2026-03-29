@@ -32,6 +32,7 @@ from offagent.domain.models import (
     DocumentRef,
     DocumentStructure,
     FileType,
+    InlineFragment,
     IndexedItem,
     InsertContentResult,
     InlineStyle,
@@ -52,6 +53,7 @@ from offagent.domain.models import (
     StructuredTarget,
     StructuredWriteResult,
     TableCollection,
+    VisibleTextRange,
     WorkbookStructure,
     WorksheetSummary,
     XlsxInsertRowsResult,
@@ -327,6 +329,8 @@ class AppServices:
         object_type: str,
         properties: dict[str, Any],
         position: object | None = None,
+        segments: Sequence[InlineFragment] | Sequence[dict[str, Any]] | None = None,
+        text_range: VisibleTextRange | dict[str, Any] | None = None,
         *,
         output_mode: OutputMode = "versioned",
     ) -> MutationResult:
@@ -344,6 +348,8 @@ class AppServices:
                 object_type=object_type,
                 properties=properties,
                 position=position,
+                segments=_coerce_inline_fragments(segments),
+                text_range=_coerce_visible_text_range(text_range),
                 output_path=output_path,
             )
         except (InvalidArgumentsError, TargetNotFoundError, TargetNotEditableError) as exc:
@@ -369,6 +375,8 @@ class AppServices:
         document_id: str,
         locator: str,
         properties: dict[str, Any],
+        segments: Sequence[InlineFragment] | Sequence[dict[str, Any]] | None = None,
+        text_range: VisibleTextRange | dict[str, Any] | None = None,
         *,
         output_mode: OutputMode = "versioned",
     ) -> MutationResult:
@@ -384,6 +392,8 @@ class AppServices:
                 document.file_type,
                 locator=locator,
                 properties=properties,
+                segments=_coerce_inline_fragments(segments),
+                text_range=_coerce_visible_text_range(text_range),
                 output_path=output_path,
             )
         except (InvalidArgumentsError, TargetNotFoundError, TargetNotEditableError) as exc:
@@ -1025,6 +1035,7 @@ class AppServices:
         locator: str,
         style: InlineStyle,
         clear_fields: list[str] | tuple[str, ...] | None = None,
+        text_range: VisibleTextRange | dict[str, Any] | None = None,
         *,
         output_mode: OutputMode = "versioned",
     ) -> MutationResult:
@@ -1032,12 +1043,31 @@ class AppServices:
         self._ensure_object_locator_fresh(document, locator)
         output_path = self._resolve_write_output_path(document.path, output_mode=output_mode)
         clear_list = [] if clear_fields is None else list(clear_fields)
+        range_value = _coerce_visible_text_range(text_range)
 
         try:
-            if document.file_type == "docx":
+            if document.file_type == "docx" and range_value is not None:
+                output_path, result_locator, metadata = docx_adapter.style_paragraph_range(
+                    document.path,
+                    locator,
+                    range_value,
+                    style,
+                    clear_list,
+                    output_path=output_path,
+                )
+            elif document.file_type == "docx":
                 output_path, result_locator, metadata = docx_adapter.style_run(
                     document.path,
                     locator,
+                    style,
+                    clear_list,
+                    output_path=output_path,
+                )
+            elif document.file_type == "pptx" and range_value is not None:
+                output_path, result_locator, metadata = pptx_adapter.style_paragraph_range(
+                    document.path,
+                    locator,
+                    range_value,
                     style,
                     clear_list,
                     output_path=output_path,
@@ -1046,6 +1076,15 @@ class AppServices:
                 output_path, result_locator, metadata = pptx_adapter.style_run(
                     document.path,
                     locator,
+                    style,
+                    clear_list,
+                    output_path=output_path,
+                )
+            elif range_value is not None:
+                output_path, result_locator, metadata = xlsx_adapter.style_cell_range(
+                    document.path,
+                    locator,
+                    range_value,
                     style,
                     clear_list,
                     output_path=output_path,
@@ -2784,6 +2823,13 @@ def _validate_batch_operation(
         "copy_object": Capability.COPY,
     }[operation_name]
     _require_capability(payload.capabilities, required_capability, locator)
+    if operation_name == "update_object":
+        segments = _coerce_inline_fragments(operation.get("segments"))
+        text_range = _coerce_visible_text_range(operation.get("range"))
+        if text_range is not None:
+            raise InvalidArgumentsError("update_object does not accept range.")
+        if segments is not None and any(key in dict(operation.get("properties", {})) for key in {"text", "value"}):
+            raise InvalidArgumentsError("update_object accepts either properties.text/value or segments, not both.")
     return MutationResult(
         document_path=document_path,
         output_path=None,
@@ -2811,6 +2857,8 @@ def _apply_batch_operation(
             object_type=str(operation["object_type"]),
             properties=dict(operation.get("properties", {})),
             position=operation.get("position"),
+            segments=_coerce_inline_fragments(operation.get("segments")),
+            text_range=_coerce_visible_text_range(operation.get("range")),
             output_path=document_path,
         )
         payload = _object_resolver(file_type).get_object(document_path, locator)
@@ -2833,6 +2881,8 @@ def _apply_batch_operation(
             file_type,
             locator=locator,
             properties=dict(operation.get("properties", {})),
+            segments=_coerce_inline_fragments(operation.get("segments")),
+            text_range=_coerce_visible_text_range(operation.get("range")),
             output_path=document_path,
         )
         payload = _object_resolver(file_type).get_object(document_path, locator)
@@ -2900,6 +2950,8 @@ def _create_object_on_path(
     object_type: str,
     properties: dict[str, Any],
     position: object | None,
+    segments: tuple[InlineFragment, ...] | None,
+    text_range: VisibleTextRange | None,
     output_path: Path,
 ) -> tuple[str, str, dict[str, Any]]:
     parent = _object_resolver(file_type).get_object(document_path, parent_locator)
@@ -2911,28 +2963,94 @@ def _create_object_on_path(
             "object_type": object_type,
             "properties": properties,
             "position": position,
+            "segments": segments,
+            "range": text_range,
         },
     )
+    if file_type == "docx":
+        style_name = properties.get("style_name")
+        style = None if style_name is None else str(style_name)
+        text = _text_or_segments_text(properties, object_type, segments, keys=("text",))
+        after_locator = _docx_after_locator(position)
+        target_path, new_node_id = docx_adapter.insert_paragraph(
+            document_path,
+            text,
+            style_name=style,
+            after_locator=after_locator,
+            output_path=output_path,
+        )
+        locator = to_v2_locator(new_node_id, file_type="docx")
+        if segments:
+            target_path, locator, _ = docx_adapter.rewrite_paragraph_fragments(
+                target_path,
+                locator,
+                segments,
+                output_path=target_path,
+            )
+        return (
+            locator,
+            f"Created {object_type} under {parent_locator}.",
+            {"text": text, "segments": None if segments is None else len(segments), "style_name": style},
+        )
 
-    if file_type != "docx":
-        raise InvalidArgumentsError(f"create_object is not supported for {file_type} {object_type}.")
+    if file_type == "pptx" and object_type in {"text_shape", "textbox"}:
+        text = _text_or_segments_text(properties, object_type, segments, keys=("text",))
+        left = _optional_int(properties.get("left"))
+        top = _optional_int(properties.get("top"))
+        width = _optional_int(properties.get("width"))
+        height = _optional_int(properties.get("height"))
+        if None in {left, top, width, height}:
+            raise InvalidArgumentsError("PPTX text_shape creation requires left, top, width, and height.")
+        target_path, locator = pptx_adapter.add_textbox(
+            document_path,
+            parent_locator,
+            text,
+            left=left,
+            top=top,
+            width=width,
+            height=height,
+            output_path=output_path,
+        )
+        if segments:
+            target_path, locator, _ = pptx_adapter.rewrite_paragraph_fragments(
+                target_path,
+                locator,
+                segments,
+                output_path=target_path,
+            )
+        return (
+            locator,
+            f"Created {object_type} under {parent_locator}.",
+            {"text": text, "segments": None if segments is None else len(segments)},
+        )
 
-    style_name = properties.get("style_name")
-    style = None if style_name is None else str(style_name)
-    text = _required_string_property(properties, ("text",), object_type)
-    after_locator = _docx_after_locator(position)
-    target_path, new_node_id = docx_adapter.insert_paragraph(
-        document_path,
-        text,
-        style_name=style,
-        after_locator=after_locator,
-        output_path=output_path,
-    )
-    return (
-        to_v2_locator(new_node_id, file_type="docx"),
-        f"Created {object_type} under {parent_locator}.",
-        {"text": text, "style_name": style, "document_path": str(target_path)},
-    )
+    if file_type == "xlsx" and object_type == "cell":
+        parts = parse_locator(to_v2_locator(parent_locator, file_type="xlsx")).components
+        if len(parts) != 3 or parts[:2] != ("xlsx", "sheet"):
+            raise InvalidArgumentsError("XLSX cell creation requires a worksheet parent locator.")
+        coordinate = properties.get("coordinate")
+        if not isinstance(coordinate, str) or not coordinate.strip():
+            raise InvalidArgumentsError("XLSX cell creation requires a coordinate.")
+        locator = f"xlsx:sheet:{parts[2]}!{coordinate.strip().upper()}"
+        if segments:
+            target_path, locator, _ = xlsx_adapter.write_cell_fragments(
+                document_path,
+                locator,
+                segments,
+                output_path=output_path,
+            )
+            text = "".join(fragment.text for fragment in segments)
+        else:
+            text = _required_string_property(properties, ("value", "text"), object_type)
+            xlsx_adapter.write_node(document_path, to_legacy_locator(locator, file_type="xlsx"), text, output_path)
+            target_path = output_path
+        return (
+            locator,
+            f"Created {object_type} under {parent_locator}.",
+            {"value": text, "segments": None if segments is None else len(segments)},
+        )
+
+    raise InvalidArgumentsError(f"create_object is not supported for {file_type} {object_type}.")
 
 
 def _update_object_on_path(
@@ -2941,10 +3059,46 @@ def _update_object_on_path(
     *,
     locator: str,
     properties: dict[str, Any],
+    segments: tuple[InlineFragment, ...] | None,
+    text_range: VisibleTextRange | None,
     output_path: Path,
 ) -> tuple[str, dict[str, Any]]:
     payload = _object_resolver(file_type).get_object(document_path, locator)
     _require_capability(payload.capabilities, Capability.UPDATE, locator)
+    if text_range is not None:
+        raise InvalidArgumentsError("update_object does not support range; use style_inline for partial formatting.")
+    if segments is not None and any(key in properties for key in {"text", "value"}):
+        raise InvalidArgumentsError("update_object accepts either properties.text/value or segments, not both.")
+
+    if file_type == "docx" and segments is not None:
+        _, _, snapshot = docx_adapter.rewrite_paragraph_fragments(
+            document_path,
+            locator,
+            segments,
+            output_path=output_path,
+        )
+        return (f"Updated {payload.object_type} {locator}.", {"text": snapshot.text, "segments": len(snapshot.fragments)})
+
+    if file_type == "pptx" and segments is not None:
+        _, rewritten_locator, snapshot = pptx_adapter.rewrite_paragraph_fragments(
+            document_path,
+            locator,
+            segments,
+            output_path=output_path,
+        )
+        return (
+            f"Updated {payload.object_type} {rewritten_locator}.",
+            {"text": snapshot.text, "segments": len(snapshot.fragments)},
+        )
+
+    if file_type == "xlsx" and segments is not None:
+        _, _, snapshot = xlsx_adapter.write_cell_fragments(
+            document_path,
+            locator,
+            segments,
+            output_path=output_path,
+        )
+        return (f"Updated {payload.object_type} {locator}.", {"value": snapshot.text, "segments": len(snapshot.fragments)})
 
     if file_type in {"docx", "pptx"}:
         content = _required_string_property(properties, ("text", "value"), payload.object_type)
@@ -3033,10 +3187,31 @@ def _delete_object_on_path(
 
 def _validate_create_operation(file_type: FileType, operation: dict[str, Any]) -> None:
     object_type = str(operation["object_type"])
-    if file_type != "docx" or object_type != "paragraph":
-        raise InvalidArgumentsError(f"create_object does not support {file_type} {object_type}.")
-    _required_string_property(dict(operation.get("properties", {})), ("text",), object_type)
-    _docx_after_locator(operation.get("position"))
+    segments = _coerce_inline_fragments(operation.get("segments"))
+    text_range = _coerce_visible_text_range(operation.get("range"))
+    properties = dict(operation.get("properties", {}))
+    if text_range is not None:
+        raise InvalidArgumentsError("create_object does not accept range.")
+    if segments is not None and any(key in properties for key in {"text", "value"}):
+        raise InvalidArgumentsError("create_object accepts either text/value or segments, not both.")
+    if file_type == "docx" and object_type == "paragraph":
+        _text_or_segments_text(properties, object_type, segments, keys=("text",))
+        _docx_after_locator(operation.get("position"))
+        return
+    if file_type == "pptx" and object_type in {"text_shape", "textbox"}:
+        _text_or_segments_text(properties, object_type, segments, keys=("text",))
+        for key in ("left", "top", "width", "height"):
+            if _optional_int(properties.get(key)) is None:
+                raise InvalidArgumentsError("PPTX text_shape creation requires left, top, width, and height.")
+        return
+    if file_type == "xlsx" and object_type == "cell":
+        coordinate = properties.get("coordinate")
+        if not isinstance(coordinate, str) or not coordinate.strip():
+            raise InvalidArgumentsError("XLSX cell creation requires a coordinate.")
+        if segments is None:
+            _required_string_property(properties, ("value", "text"), object_type)
+        return
+    raise InvalidArgumentsError(f"create_object does not support {file_type} {object_type}.")
 
 
 def _operation_name(operation: dict[str, Any]) -> str:
@@ -3062,6 +3237,72 @@ def _required_string_property(
             continue
         return str(value)
     raise InvalidArgumentsError(f"{object_type} updates require one of: {', '.join(keys)}.")
+
+
+def _text_or_segments_text(
+    properties: dict[str, Any],
+    object_type: str,
+    segments: tuple[InlineFragment, ...] | None,
+    *,
+    keys: Sequence[str],
+) -> str:
+    if segments is not None:
+        return "".join(fragment.text for fragment in segments)
+    return _required_string_property(properties, keys, object_type)
+
+
+def _coerce_inline_fragments(
+    value: object,
+) -> tuple[InlineFragment, ...] | None:
+    if value is None:
+        return None
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+        raise InvalidArgumentsError("segments must be a sequence of inline fragments.")
+    fragments: list[InlineFragment] = []
+    for raw_fragment in value:
+        if isinstance(raw_fragment, InlineFragment):
+            fragment = raw_fragment
+        elif isinstance(raw_fragment, dict):
+            text = raw_fragment.get("text")
+            if not isinstance(text, str) or not text:
+                raise InvalidArgumentsError("segments must contain non-empty text.")
+            raw_style = raw_fragment.get("style")
+            if raw_style is None:
+                style = InlineStyle()
+            elif isinstance(raw_style, InlineStyle):
+                style = raw_style
+            elif isinstance(raw_style, dict):
+                style = InlineStyle(**raw_style)
+            else:
+                raise InvalidArgumentsError("segment styles must be objects.")
+            fragment = InlineFragment(text=text, style=style)
+        else:
+            raise InvalidArgumentsError("segments must contain inline-fragment objects.")
+        if not fragment.text:
+            raise InvalidArgumentsError("segments must contain non-empty text.")
+        fragments.append(fragment)
+    if not fragments:
+        raise InvalidArgumentsError("segments must not be empty.")
+    return tuple(fragments)
+
+
+def _coerce_visible_text_range(
+    value: object,
+) -> VisibleTextRange | None:
+    if value is None:
+        return None
+    if isinstance(value, VisibleTextRange):
+        result = value
+    elif isinstance(value, dict):
+        try:
+            result = VisibleTextRange(start=int(value["start"]), end=int(value["end"]))
+        except (KeyError, TypeError, ValueError) as exc:
+            raise InvalidArgumentsError("range must contain integer start and end offsets.") from exc
+    else:
+        raise InvalidArgumentsError("range must be an object with start and end offsets.")
+    if result.start < 0 or result.end <= result.start:
+        raise InvalidArgumentsError("range must use non-negative offsets with end > start.")
+    return result
 
 
 def _docx_after_locator(position: object | None) -> str | None:

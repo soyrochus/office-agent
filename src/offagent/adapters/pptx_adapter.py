@@ -7,6 +7,7 @@ from offagent.domain.locators import parse_locator, to_v2_locator
 from offagent.domain.models import (
     BlockStyle,
     DocumentRef,
+    InlineFragment,
     InlineStyle,
     IndexedItem,
     PresentationSlideSummary,
@@ -15,6 +16,13 @@ from offagent.domain.models import (
     SlideBundle,
     SlideTextBlock,
     StructureSection,
+    TextContainerSnapshot,
+    VisibleTextRange,
+)
+from offagent.domain.text_fragments import (
+    apply_style_to_range,
+    fragment_text,
+    normalize_fragments,
 )
 from offagent.errors import InvalidArgumentsError, TargetNotEditableError as BaseTargetNotEditableError
 from offagent.errors import TargetNotFoundError
@@ -313,6 +321,49 @@ def add_textbox(
     return target_path, locator
 
 
+def read_paragraph_fragments(document_path: Path, locator: str) -> TextContainerSnapshot:
+    presentation = _open_presentation(document_path)
+    target = _resolve_paragraph_container(presentation, locator)
+    fragments = _read_pptx_paragraph_fragments(target["paragraph"])
+    return TextContainerSnapshot(
+        locator=target["paragraph_locator"],
+        object_type="paragraph",
+        text=fragment_text(fragments),
+        fragments=fragments,
+        metadata={
+            "slide_number": target["slide_number"],
+            "shape_id": target["shape_id"],
+            "paragraph_index": target["paragraph_index"],
+        },
+    )
+
+
+def rewrite_paragraph_fragments(
+    document_path: Path,
+    locator: str,
+    fragments: list[InlineFragment] | tuple[InlineFragment, ...],
+    output_path: Path | None = None,
+) -> tuple[Path, str, TextContainerSnapshot]:
+    presentation = _open_presentation(document_path)
+    target = _resolve_paragraph_container(presentation, locator)
+    normalized = normalize_fragments(fragments)
+    _rewrite_pptx_paragraph(target["paragraph"], normalized)
+    target_path = _target_path(document_path, output_path)
+    presentation.save(target_path)
+    snapshot = TextContainerSnapshot(
+        locator=target["paragraph_locator"],
+        object_type="paragraph",
+        text=fragment_text(normalized),
+        fragments=normalized,
+        metadata={
+            "slide_number": target["slide_number"],
+            "shape_id": target["shape_id"],
+            "paragraph_index": target["paragraph_index"],
+        },
+    )
+    return target_path, target["paragraph_locator"], snapshot
+
+
 def style_run(
     document_path: Path,
     locator: str,
@@ -327,6 +378,30 @@ def style_run(
     target_path = _target_path(document_path, output_path)
     presentation.save(target_path)
     return target_path, target["shape_locator"], {"cleared_fields": clear_set, "skipped_fields": skipped_fields}
+
+
+def style_paragraph_range(
+    document_path: Path,
+    locator: str,
+    text_range: VisibleTextRange,
+    style: InlineStyle,
+    clear_fields: list[str] | tuple[str, ...],
+    output_path: Path | None = None,
+) -> tuple[Path, str, dict[str, object]]:
+    snapshot = read_paragraph_fragments(document_path, locator)
+    clear_set = _normalize_clear_fields(clear_fields, _INLINE_STYLE_FIELDS)
+    styled = apply_style_to_range(snapshot.fragments, text_range, style=style, clear_fields=clear_set)
+    target_path, paragraph_locator, rewritten = rewrite_paragraph_fragments(
+        document_path,
+        locator,
+        styled,
+        output_path=output_path,
+    )
+    return target_path, paragraph_locator, {
+        "cleared_fields": clear_set,
+        "range": {"start": text_range.start, "end": text_range.end},
+        "text": rewritten.text,
+    }
 
 
 def style_paragraph(
@@ -470,8 +545,10 @@ def _default_textbox_geometry(
 def _resolve_text_target(presentation, locator: str, *, require_run: bool) -> dict[str, object]:
     canonical = to_v2_locator(locator, file_type="pptx")
     parts = parse_locator(canonical).components
-    if len(parts) < 5 or parts[:2] != ("pptx", "slide") or parts[3] != "shape":
+    if len(parts) < 5 or parts[:2] != ("pptx", "slide"):
         raise InvalidArgumentsError(f"Unsupported PPTX text locator: {locator}")
+    if parts[3] not in {"shape", "text_shape"}:
+        raise TargetNotEditableError("target not editable")
 
     slide_number = _parse_index(parts[2], locator, label="slide")
     shape_id = _parse_index(parts[4], locator, label="shape")
@@ -516,6 +593,25 @@ def _resolve_text_target(presentation, locator: str, *, require_run: bool) -> di
         "paragraph": paragraph,
         "run": run,
     }
+
+
+def _resolve_paragraph_container(presentation, locator: str) -> dict[str, object]:
+    target = _resolve_text_target(presentation, locator, require_run=False)
+    canonical = str(target["canonical_locator"])
+    paragraph_locator = (
+        canonical
+        if ":para:" in canonical and ":run:" not in canonical
+        else f"pptx:slide:{target['slide_number']}:text_shape:{target['shape_id']}:para:{target['paragraph_index']}"
+    )
+    if ":run:" in canonical:
+        paragraph_locator = canonical.rsplit(":run:", maxsplit=1)[0]
+    if ":para:" not in canonical:
+        text_frame = _require_text_frame(_resolve_shape(presentation, make_item_id(target["slide_number"], target["shape_id"])))
+        if len(text_frame.paragraphs) != 1:
+            raise TargetNotEditableError(
+                "PPTX range-based partial formatting requires a paragraph locator or a single-paragraph text shape."
+            )
+    return {**target, "paragraph_locator": paragraph_locator}
 
 
 def _slide_text_blocks(slide) -> list[SlideTextBlock]:
@@ -573,6 +669,54 @@ def _notes_text(slide) -> str:
         return ""
     lines = [paragraph.text for paragraph in text_frame.paragraphs if paragraph.text.strip()]
     return "\n".join(lines)
+
+
+def _read_pptx_paragraph_fragments(paragraph) -> tuple[InlineFragment, ...]:
+    if not paragraph.runs:
+        return ()
+    return normalize_fragments(
+        [
+            InlineFragment(
+                text=run.text,
+                style=_capture_pptx_inline_style(run),
+            )
+            for run in paragraph.runs
+        ]
+    )
+
+
+def _rewrite_pptx_paragraph(
+    paragraph,
+    fragments: list[InlineFragment] | tuple[InlineFragment, ...],
+) -> None:
+    paragraph.clear()
+    normalized = normalize_fragments(fragments)
+    if not normalized:
+        paragraph.add_run().text = ""
+        return
+    for fragment in normalized:
+        run = paragraph.add_run()
+        run.text = fragment.text
+        _apply_pptx_inline_style(run, fragment.style, ())
+
+
+def _capture_pptx_inline_style(run) -> InlineStyle:
+    font = run.font
+    font_size = None
+    if font.size is not None:
+        font_size = font.size.pt
+    font_color = None
+    if getattr(font.color, "rgb", None) is not None:
+        font_color = str(font.color.rgb)
+    return InlineStyle(
+        bold=getattr(font, "bold", None),
+        italic=getattr(font, "italic", None),
+        underline=getattr(font, "underline", None),
+        strike=getattr(font, "strike", None),
+        font_name=getattr(font, "name", None),
+        font_size=font_size,
+        font_color=font_color,
+    )
 
 
 _INLINE_STYLE_FIELDS = frozenset(

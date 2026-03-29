@@ -22,6 +22,8 @@ class _PptxTarget:
     object_type: str
     slide_number: int | None = None
     shape_id: int | None = None
+    paragraph_index: int | None = None
+    run_index: int | None = None
     row_index: int | None = None
     column_index: int | None = None
 
@@ -40,6 +42,10 @@ class PptxObjectResolver:
             return _build_notes_payload(document_path, presentation, target)
         if target.object_type in {"shape", "text_shape", "image_shape", "table", "group_shape"}:
             return _build_shape_payload(document_path, presentation, target)
+        if target.object_type == "paragraph":
+            return _build_paragraph_payload(document_path, presentation, target)
+        if target.object_type == "run":
+            return _build_run_payload(document_path, presentation, target)
         if target.object_type == "table_row":
             return _build_table_row_payload(document_path, presentation, target)
         if target.object_type == "table_cell":
@@ -62,6 +68,10 @@ class PptxObjectResolver:
             children = _presentation_children(presentation, child_type=child_type)
         elif target.object_type == "slide":
             children = _slide_children(presentation, target, child_type=child_type)
+        elif target.object_type in {"shape", "text_shape"}:
+            children = _text_shape_children(presentation, target, child_type=child_type)
+        elif target.object_type == "paragraph":
+            children = _paragraph_children(presentation, target, child_type=child_type)
         elif target.object_type == "table":
             children = _table_children(presentation, target, child_type=child_type)
         elif target.object_type == "table_row":
@@ -279,6 +289,47 @@ def _build_shape_payload(document_path: Path, presentation, target: _PptxTarget)
     )
 
 
+def _build_paragraph_payload(document_path: Path, presentation, target: _PptxTarget) -> ObjectPayload:
+    resolved = _resolve_paragraph_target(presentation, target)
+    paragraph = resolved["paragraph"]
+    return ObjectPayload(
+        document=pptx_adapter._document_ref(document_path),
+        locator=target.canonical_locator,
+        object_type="paragraph",
+        preview=paragraph.text[:120],
+        properties={
+            "slide_number": resolved["slide_number"],
+            "shape_id": resolved["shape_id"],
+            "paragraph_index": resolved["paragraph_index"],
+            "text": paragraph.text,
+            "run_count": len(paragraph.runs),
+        },
+        capabilities=_capability_tuple("paragraph"),
+        parent_locator=f"pptx:slide:{resolved['slide_number']}:text_shape:{resolved['shape_id']}",
+        child_summary=_paragraph_children(presentation, target),
+    )
+
+
+def _build_run_payload(document_path: Path, presentation, target: _PptxTarget) -> ObjectPayload:
+    resolved = _resolve_run_target(presentation, target)
+    run = resolved["run"]
+    return ObjectPayload(
+        document=pptx_adapter._document_ref(document_path),
+        locator=target.canonical_locator,
+        object_type="run",
+        preview=run.text[:120],
+        properties={
+            "slide_number": resolved["slide_number"],
+            "shape_id": resolved["shape_id"],
+            "paragraph_index": resolved["paragraph_index"],
+            "run_index": resolved["run_index"],
+            "text": run.text,
+        },
+        capabilities=_capability_tuple("run"),
+        parent_locator=f"pptx:slide:{resolved['slide_number']}:text_shape:{resolved['shape_id']}:para:{resolved['paragraph_index']}",
+    )
+
+
 def _build_table_row_payload(document_path: Path, presentation, target: _PptxTarget) -> ObjectPayload:
     resolved = _resolve_table_row_target(presentation, target)
     return ObjectPayload(
@@ -362,6 +413,41 @@ def _slide_children(presentation, target: _PptxTarget, *, child_type: str | None
     return tuple(children)
 
 
+def _text_shape_children(presentation, target: _PptxTarget, *, child_type: str | None = None) -> tuple[ChildSummary, ...]:
+    if child_type not in {None, "", "paragraph"}:
+        return ()
+    resolved = _resolve_shape_target(presentation, target)
+    shape = resolved["shape"]
+    if not getattr(shape, "has_text_frame", False):
+        return ()
+    return tuple(
+        ChildSummary(
+            locator=f"pptx:slide:{resolved['slide_number']}:text_shape:{resolved['shape_id']}:para:{paragraph_index}",
+            object_type="paragraph",
+            preview=paragraph.text[:120],
+            capabilities=_capability_tuple("paragraph"),
+        )
+        for paragraph_index, paragraph in enumerate(shape.text_frame.paragraphs)
+    )
+
+
+def _paragraph_children(presentation, target: _PptxTarget, *, child_type: str | None = None) -> tuple[ChildSummary, ...]:
+    if child_type not in {None, "", "run"}:
+        return ()
+    resolved = _resolve_paragraph_target(presentation, target)
+    return tuple(
+        ChildSummary(
+            locator=(
+                f"pptx:slide:{resolved['slide_number']}:text_shape:{resolved['shape_id']}:para:{resolved['paragraph_index']}:run:{run_index}"
+            ),
+            object_type="run",
+            preview=run.text[:120],
+            capabilities=_capability_tuple("run"),
+        )
+        for run_index, run in enumerate(resolved["paragraph"].runs)
+    )
+
+
 def _table_children(presentation, target: _PptxTarget, *, child_type: str | None = None) -> tuple[ChildSummary, ...]:
     resolved = _resolve_shape_target(presentation, target)
     shape = resolved["shape"]
@@ -412,6 +498,33 @@ def _resolve_shape_target(presentation, target: _PptxTarget) -> dict[str, Any]:
                 "shape": shape,
             }
     raise TargetNotFoundError(f"Shape {target.shape_id} does not exist on slide {target.slide_number}.")
+
+
+def _resolve_paragraph_target(presentation, target: _PptxTarget) -> dict[str, Any]:
+    resolved = _resolve_shape_target(presentation, target)
+    shape = resolved["shape"]
+    if not getattr(shape, "has_text_frame", False):
+        raise TargetNotFoundError(f"Shape {resolved['shape_id']} is not a text shape.")
+    assert target.paragraph_index is not None
+    try:
+        paragraph = shape.text_frame.paragraphs[target.paragraph_index]
+    except IndexError as exc:
+        raise TargetNotFoundError(
+            f"Paragraph {target.paragraph_index} does not exist in shape {resolved['shape_id']}."
+        ) from exc
+    return {**resolved, "paragraph_index": target.paragraph_index, "paragraph": paragraph}
+
+
+def _resolve_run_target(presentation, target: _PptxTarget) -> dict[str, Any]:
+    resolved = _resolve_paragraph_target(presentation, target)
+    assert target.run_index is not None
+    try:
+        run = resolved["paragraph"].runs[target.run_index]
+    except IndexError as exc:
+        raise TargetNotFoundError(
+            f"Run {target.run_index} does not exist in paragraph {resolved['paragraph_index']}."
+        ) from exc
+    return {**resolved, "run_index": target.run_index, "run": run}
 
 
 def _resolve_table_row_target(presentation, target: _PptxTarget) -> dict[str, Any]:
@@ -567,6 +680,34 @@ def _parse_pptx_target(locator: str) -> _PptxTarget:
             slide_number=_require_index(components[2], locator),
             shape_id=_require_index(components[4], locator),
         )
+    if (
+        len(components) == 7
+        and components[:2] == ("pptx", "slide")
+        and components[3] in {"shape", "text_shape"}
+        and components[5] == "para"
+    ):
+        return _PptxTarget(
+            locator,
+            "paragraph",
+            slide_number=_require_index(components[2], locator),
+            shape_id=_require_index(components[4], locator),
+            paragraph_index=_require_index(components[6], locator),
+        )
+    if (
+        len(components) == 9
+        and components[:2] == ("pptx", "slide")
+        and components[3] in {"shape", "text_shape"}
+        and components[5] == "para"
+        and components[7] == "run"
+    ):
+        return _PptxTarget(
+            locator,
+            "run",
+            slide_number=_require_index(components[2], locator),
+            shape_id=_require_index(components[4], locator),
+            paragraph_index=_require_index(components[6], locator),
+            run_index=_require_index(components[8], locator),
+        )
     if len(components) == 7 and components[:2] == ("pptx", "slide") and components[3] == "table" and components[5] == "row":
         return _PptxTarget(
             locator,
@@ -611,6 +752,10 @@ def _capabilities_for(object_type: str) -> frozenset[Capability]:
         return frozenset({Capability.READ, Capability.UPDATE})
     if object_type in {"shape", "text_shape", "image_shape", "group_shape"}:
         return frozenset({Capability.READ, Capability.UPDATE, Capability.DELETE, Capability.MOVE, Capability.COPY})
+    if object_type == "paragraph":
+        return frozenset({Capability.READ, Capability.UPDATE, Capability.STYLE})
+    if object_type == "run":
+        return frozenset({Capability.READ, Capability.UPDATE, Capability.STYLE})
     if object_type == "table":
         return frozenset(
             {

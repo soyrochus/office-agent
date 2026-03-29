@@ -100,6 +100,27 @@ class InlineStyle:
 
 
 @dataclass(frozen=True)
+class VisibleTextRange:
+    start: int
+    end: int
+
+
+@dataclass(frozen=True)
+class InlineFragment:
+    text: str
+    style: InlineStyle = field(default_factory=InlineStyle)
+
+
+@dataclass(frozen=True)
+class TextContainerSnapshot:
+    locator: str
+    object_type: str
+    text: str
+    fragments: tuple[InlineFragment, ...]
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class BlockStyle:
     alignment: str | None = None
     indent_level: int | None = None

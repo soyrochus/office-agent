@@ -14,10 +14,18 @@ from offagent.domain.models import (
     DocxTable,
     DocumentBlock,
     DocumentRef,
+    InlineFragment,
     InlineStyle,
     IndexedItem,
     SectionPayload,
     StructureSection,
+    TextContainerSnapshot,
+    VisibleTextRange,
+)
+from offagent.domain.text_fragments import (
+    apply_style_to_range,
+    fragment_text,
+    normalize_fragments,
 )
 from offagent.errors import InvalidArgumentsError, TargetNotEditableError, TargetNotFoundError
 
@@ -291,6 +299,49 @@ def write_node(document_path: Path, locator: str, text: str, output_path: Path |
     return target_path
 
 
+def read_paragraph_fragments(document_path: Path, locator: str) -> TextContainerSnapshot:
+    document = _open_document(document_path)
+    canonical, components = _canonical_docx_locator(locator)
+    if len(components) != 3 or components[:2] != ("docx", "para"):
+        raise InvalidArgumentsError("DOCX fragment reads require a paragraph locator.")
+
+    paragraph = _resolve_paragraph(document, f"para:{components[2]}")
+    fragments = _read_docx_paragraph_fragments(paragraph)
+    return TextContainerSnapshot(
+        locator=canonical,
+        object_type="paragraph",
+        text=fragment_text(fragments),
+        fragments=fragments,
+        metadata={"paragraph_index": int(components[2])},
+    )
+
+
+def rewrite_paragraph_fragments(
+    document_path: Path,
+    locator: str,
+    fragments: list[InlineFragment] | tuple[InlineFragment, ...],
+    output_path: Path | None = None,
+) -> tuple[Path, str, TextContainerSnapshot]:
+    document = _open_document(document_path)
+    canonical, components = _canonical_docx_locator(locator)
+    if len(components) != 3 or components[:2] != ("docx", "para"):
+        raise InvalidArgumentsError("DOCX fragment writes require a paragraph locator.")
+
+    paragraph = _resolve_paragraph(document, f"para:{components[2]}")
+    normalized = normalize_fragments(fragments)
+    _rewrite_docx_paragraph(paragraph, normalized)
+    target_path = _target_path(document_path, output_path)
+    document.save(target_path)
+    snapshot = TextContainerSnapshot(
+        locator=canonical,
+        object_type="paragraph",
+        text=fragment_text(normalized),
+        fragments=normalized,
+        metadata={"paragraph_index": int(components[2])},
+    )
+    return target_path, canonical, snapshot
+
+
 def insert_paragraph(
     document_path: Path,
     text: str,
@@ -416,6 +467,30 @@ def style_run(
     target_path = _target_path(document_path, output_path)
     document.save(target_path)
     return target_path, canonical, {"cleared_fields": cleared_fields}
+
+
+def style_paragraph_range(
+    document_path: Path,
+    locator: str,
+    text_range: VisibleTextRange,
+    style: InlineStyle,
+    clear_fields: list[str] | tuple[str, ...],
+    output_path: Path | None = None,
+) -> tuple[Path, str, dict[str, object]]:
+    snapshot = read_paragraph_fragments(document_path, locator)
+    cleared_fields = _normalize_clear_fields(clear_fields, _INLINE_STYLE_FIELDS)
+    styled = apply_style_to_range(snapshot.fragments, text_range, style=style, clear_fields=cleared_fields)
+    target_path, canonical, rewritten = rewrite_paragraph_fragments(
+        document_path,
+        locator,
+        styled,
+        output_path=output_path,
+    )
+    return target_path, canonical, {
+        "cleared_fields": cleared_fields,
+        "range": {"start": text_range.start, "end": text_range.end},
+        "text": rewritten.text,
+    }
 
 
 def style_paragraph(
@@ -740,6 +815,46 @@ def _clear_paragraph(paragraph) -> None:
         if child.tag.endswith("}pPr"):
             continue
         paragraph_element.remove(child)
+
+
+def _ensure_rewritable_docx_paragraph(paragraph) -> None:
+    for child in list(paragraph._element):
+        if child.tag.endswith("}pPr"):
+            continue
+        if not child.tag.endswith("}r"):
+            raise TargetNotEditableError(
+                "DOCX paragraph contains inline content that cannot be safely reconstructed."
+            )
+
+
+def _read_docx_paragraph_fragments(paragraph) -> tuple[InlineFragment, ...]:
+    _ensure_rewritable_docx_paragraph(paragraph)
+    if not paragraph.runs:
+        return ()
+    return normalize_fragments(
+        [
+            InlineFragment(
+                text=run.text,
+                style=_capture_run_formatting(run) or InlineStyle(),
+            )
+            for run in paragraph.runs
+        ]
+    )
+
+
+def _rewrite_docx_paragraph(
+    paragraph,
+    fragments: list[InlineFragment] | tuple[InlineFragment, ...],
+) -> None:
+    _ensure_rewritable_docx_paragraph(paragraph)
+    _clear_paragraph(paragraph)
+    normalized = normalize_fragments(fragments)
+    if not normalized:
+        paragraph.add_run("")
+        return
+    for fragment in normalized:
+        run = paragraph.add_run(fragment.text)
+        _apply_docx_inline_style(run, fragment.style, ())
 
 
 def _target_path(document_path: Path, output_path: Path | None) -> Path:

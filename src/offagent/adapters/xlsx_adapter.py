@@ -9,30 +9,43 @@ from offagent.domain.locators import parse_locator, to_v2_locator
 from offagent.domain.models import (
     BlockStyle,
     DocumentRef,
+    InlineFragment,
     InlineStyle,
     IndexedItem,
     SectionPayload,
     SheetCell,
     SheetSnapshot,
     StructureSection,
+    TextContainerSnapshot,
+    VisibleTextRange,
     WorkbookStructure,
     WorksheetSummary,
     XlsxSectionCell,
     XlsxRowEmbedding,
     XlsxRowEmbeddingCell,
 )
+from offagent.domain.text_fragments import (
+    apply_style_to_range,
+    fragment_text,
+    normalize_fragments,
+)
 from offagent.errors import InvalidArgumentsError, TargetNotEditableError
 from offagent.errors import TargetNotFoundError
 
 try:
     from openpyxl import Workbook, load_workbook
+    from openpyxl.cell.rich_text import CellRichText, TextBlock
+    from openpyxl.cell.text import InlineFont
     from openpyxl.styles import Alignment, Font, PatternFill
     from openpyxl.utils.cell import coordinate_to_tuple, get_column_letter, range_boundaries
 except ModuleNotFoundError:  # pragma: no cover - exercised through dependency checks
     Workbook = None
+    CellRichText = None
     Alignment = None
     Font = None
+    InlineFont = None
     PatternFill = None
+    TextBlock = None
     load_workbook = None
     coordinate_to_tuple = None
     get_column_letter = None
@@ -102,7 +115,7 @@ def extract_document(document_path: Path) -> list[IndexedItem]:
                     metadata={
                         "sheet_name": worksheet.title,
                         "coordinate": cell.coordinate,
-                        "raw_value": cell.value,
+                        "raw_value": _metadata_raw_value(cell.value),
                         "formula": formula,
                         "display_text": display_text,
                         "data_type": cell.data_type,
@@ -409,7 +422,7 @@ def get_sheet_snapshot(
                         column=cell.column,
                         display_value=_display_text(cell),
                         metadata={
-                            "raw_value": cell.value,
+                            "raw_value": _metadata_raw_value(cell.value),
                             "formula": _formula_text(cell),
                             "data_type": cell.data_type,
                         },
@@ -544,6 +557,69 @@ def style_cell_inline(
     return target_path, canonical, {"cleared_fields": clear_set, "skipped_fields": skipped_fields}
 
 
+def read_cell_fragments(document_path: Path, locator: str) -> TextContainerSnapshot:
+    workbook = _open_workbook(document_path)
+    canonical = to_v2_locator(locator, file_type="xlsx")
+    cell = _resolve_cell(workbook, _legacy_item_id_from_v2(canonical))
+    _ensure_partial_formatting_cell_supported(cell, canonical)
+    fragments = _read_xlsx_fragments(cell)
+    return TextContainerSnapshot(
+        locator=canonical,
+        object_type="cell",
+        text=fragment_text(fragments),
+        fragments=fragments,
+        metadata={"sheet_name": cell.parent.title, "coordinate": cell.coordinate},
+    )
+
+
+def write_cell_fragments(
+    document_path: Path,
+    locator: str,
+    fragments: list[InlineFragment] | tuple[InlineFragment, ...],
+    output_path: Path | None = None,
+) -> tuple[Path, str, TextContainerSnapshot]:
+    workbook = _open_workbook(document_path)
+    canonical = to_v2_locator(locator, file_type="xlsx")
+    cell = _resolve_cell(workbook, _legacy_item_id_from_v2(canonical))
+    _ensure_partial_formatting_cell_supported(cell, canonical)
+    normalized = normalize_fragments(fragments)
+    _write_xlsx_fragments(cell, normalized)
+    target_path = _target_path(document_path, output_path)
+    workbook.save(target_path)
+    snapshot = TextContainerSnapshot(
+        locator=canonical,
+        object_type="cell",
+        text=fragment_text(normalized),
+        fragments=normalized,
+        metadata={"sheet_name": cell.parent.title, "coordinate": cell.coordinate},
+    )
+    return target_path, canonical, snapshot
+
+
+def style_cell_range(
+    document_path: Path,
+    locator: str,
+    text_range: VisibleTextRange,
+    style: InlineStyle,
+    clear_fields: list[str] | tuple[str, ...],
+    output_path: Path | None = None,
+) -> tuple[Path, str, dict[str, object]]:
+    snapshot = read_cell_fragments(document_path, locator)
+    clear_set = _normalize_clear_fields(clear_fields, _INLINE_STYLE_FIELDS)
+    styled = apply_style_to_range(snapshot.fragments, text_range, style=style, clear_fields=clear_set)
+    target_path, canonical, rewritten = write_cell_fragments(
+        document_path,
+        locator,
+        styled,
+        output_path=output_path,
+    )
+    return target_path, canonical, {
+        "cleared_fields": clear_set,
+        "range": {"start": text_range.start, "end": text_range.end},
+        "text": rewritten.text,
+    }
+
+
 def style_cell_block(
     document_path: Path,
     locator: str,
@@ -564,7 +640,7 @@ def style_cell_block(
 def _open_workbook(document_path: Path):
     if load_workbook is None:
         raise RuntimeError("openpyxl is required for XLSX operations.")
-    return load_workbook(str(document_path))
+    return load_workbook(str(document_path), rich_text=True)
 
 
 def _document_ref(document_path: Path) -> DocumentRef:
@@ -609,6 +685,12 @@ def _display_text(cell) -> str:
     if formula is not None:
         return formula
     return "" if cell.value is None else str(cell.value)
+
+
+def _metadata_raw_value(value: object) -> object:
+    if CellRichText is not None and isinstance(value, CellRichText):
+        return str(value)
+    return value
 
 
 def _coerce_value(value: str) -> object:
@@ -664,6 +746,98 @@ def _legacy_item_id_from_v2(locator: str) -> str:
     if len(components) == 4 and components[:2] == ("xlsx", "sheet"):
         return make_item_id(components[2], components[3])
     raise InvalidArgumentsError(f"XLSX cell locator required: {locator}")
+
+
+def _ensure_partial_formatting_cell_supported(cell, locator: str) -> None:
+    if _formula_text(cell) is not None:
+        raise TargetNotEditableError(f"{locator} does not support partial formatting for formula cells.")
+    if isinstance(cell.value, bool):
+        raise TargetNotEditableError(f"{locator} does not support partial formatting for boolean cells.")
+    if cell.coordinate in {merged.split(':')[0] for merged in map(str, cell.parent.merged_cells.ranges)}:
+        return
+    for merged in cell.parent.merged_cells.ranges:
+        if cell.coordinate in merged:
+            raise TargetNotEditableError(f"{locator} does not support partial formatting for merged cells.")
+    if cell.value is None:
+        return
+    if CellRichText is not None and isinstance(cell.value, CellRichText):
+        return
+    if not isinstance(cell.value, str):
+        raise TargetNotEditableError(f"{locator} does not support partial formatting for non-string cells.")
+
+
+def _read_xlsx_fragments(cell) -> tuple[InlineFragment, ...]:
+    value = cell.value
+    if value is None:
+        return ()
+    if CellRichText is not None and isinstance(value, CellRichText):
+        fragments: list[InlineFragment] = []
+        for part in value:
+            if isinstance(part, str):
+                fragments.append(InlineFragment(text=part, style=InlineStyle()))
+                continue
+            fragments.append(
+                InlineFragment(
+                    text=part.text,
+                    style=_inline_style_from_xlsx_font(part.font),
+                )
+            )
+        return normalize_fragments(fragments)
+    return (InlineFragment(text=str(value), style=InlineStyle()),)
+
+
+def _write_xlsx_fragments(
+    cell,
+    fragments: list[InlineFragment] | tuple[InlineFragment, ...],
+) -> None:
+    normalized = normalize_fragments(fragments)
+    if not normalized:
+        cell.value = ""
+        return
+    if CellRichText is None or TextBlock is None or InlineFont is None:
+        raise RuntimeError("openpyxl rich-text support is required for XLSX partial formatting.")
+    rich_parts: list[object] = []
+    for fragment in normalized:
+        if all(value is None for value in fragment.style.__dict__.values()):
+            rich_parts.append(fragment.text)
+            continue
+        rich_parts.append(TextBlock(_xlsx_inline_font(fragment.style), fragment.text))
+    cell.value = CellRichText(*rich_parts)
+
+
+def _inline_style_from_xlsx_font(font) -> InlineStyle:
+    if font is None:
+        return InlineStyle()
+    color = None
+    if getattr(font, "color", None) not in {None, ""}:
+        if isinstance(font.color, str):
+            color = font.color[-6:]
+        elif getattr(font.color, "rgb", None):
+            color = str(font.color.rgb)[-6:]
+    underline = None
+    if getattr(font, "u", None) is not None:
+        underline = str(font.u).lower() not in {"", "none"}
+    return InlineStyle(
+        bold=getattr(font, "b", getattr(font, "bold", None)),
+        italic=getattr(font, "i", getattr(font, "italic", None)),
+        underline=underline if underline is not None else getattr(font, "underline", None),
+        strike=getattr(font, "strike", None),
+        font_name=getattr(font, "rFont", getattr(font, "name", None)),
+        font_size=getattr(font, "sz", None),
+        font_color=color,
+    )
+
+
+def _xlsx_inline_font(style: InlineStyle):
+    return InlineFont(
+        b=style.bold,
+        i=style.italic,
+        strike=style.strike,
+        rFont=style.font_name,
+        sz=style.font_size,
+        color=None if style.font_color is None else _normalize_hex_color(style.font_color),
+        u="single" if style.underline else None,
+    )
 
 
 _INLINE_STYLE_FIELDS = frozenset(

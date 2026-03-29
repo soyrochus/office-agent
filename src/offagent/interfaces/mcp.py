@@ -327,6 +327,7 @@ def build_mcp_server(config: AppConfig):
         document_id: str,
         locator: str,
         style: dict,
+        range: dict | None = None,
         clear_fields: list[str] | None = None,
         output_mode: str = "versioned",
     ) -> MutationResultModel:
@@ -335,6 +336,7 @@ def build_mcp_server(config: AppConfig):
                 "document_id": document_id,
                 "locator": locator,
                 "style": style,
+                "range": range,
                 "clear_fields": clear_fields or [],
                 "output_mode": output_mode,
             }
@@ -346,6 +348,7 @@ def build_mcp_server(config: AppConfig):
                     request.locator,
                     request.style.to_domain(),
                     request.clear_fields,
+                    text_range=None if request.range is None else request.range.to_domain(),
                     output_mode=request.output_mode,
                 )
             )
@@ -466,6 +469,8 @@ def _register_v2_tools(mcp, services: AppServices) -> None:
         parent_locator: str,
         object_type: str,
         properties: dict,
+        segments: list[dict] | None = None,
+        range: dict | None = None,
         position: object | None = None,
         output_mode: str = "versioned",
     ) -> MutationResultModel:
@@ -475,6 +480,8 @@ def _register_v2_tools(mcp, services: AppServices) -> None:
                 "parent_locator": parent_locator,
                 "object_type": object_type,
                 "properties": properties,
+                "segments": segments,
+                "range": range,
                 "position": position,
                 "output_mode": output_mode,
             }
@@ -487,6 +494,8 @@ def _register_v2_tools(mcp, services: AppServices) -> None:
                     request.object_type,
                     request.properties,
                     request.position,
+                    None if request.segments is None else [fragment.to_domain() for fragment in request.segments],
+                    None if request.range is None else request.range.to_domain(),
                     output_mode=request.output_mode,
                 )
             )
@@ -497,6 +506,8 @@ def _register_v2_tools(mcp, services: AppServices) -> None:
         document_id: str,
         locator: str,
         properties: dict,
+        segments: list[dict] | None = None,
+        range: dict | None = None,
         output_mode: str = "versioned",
     ) -> MutationResultModel:
         request = UpdateObjectRequest.model_validate(
@@ -504,6 +515,8 @@ def _register_v2_tools(mcp, services: AppServices) -> None:
                 "document_id": document_id,
                 "locator": locator,
                 "properties": properties,
+                "segments": segments,
+                "range": range,
                 "output_mode": output_mode,
             }
         )
@@ -513,6 +526,8 @@ def _register_v2_tools(mcp, services: AppServices) -> None:
                     request.document_id,
                     request.locator,
                     request.properties,
+                    None if request.segments is None else [fragment.to_domain() for fragment in request.segments],
+                    None if request.range is None else request.range.to_domain(),
                     output_mode=request.output_mode,
                 )
             )

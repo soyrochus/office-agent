@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from offagent.app.services import IndexSummary, OutputMode, PatchResult
 from offagent.domain.models import (
@@ -18,6 +18,7 @@ from offagent.domain.models import (
     DocxTable,
     DocumentRef,
     FileType,
+    InlineFragment,
     InlineStyle,
     InsertContentResult,
     ItemRef,
@@ -35,6 +36,7 @@ from offagent.domain.models import (
     StructuredTarget,
     StructuredWriteResult,
     TableCollection,
+    VisibleTextRange,
     XlsxInsertRowsResult,
     XlsxSectionCell,
 )
@@ -269,15 +271,35 @@ class CreateObjectRequest(MCPModel):
     parent_locator: str = Field(min_length=1)
     object_type: str = Field(min_length=1)
     properties: dict[str, Any] = Field(default_factory=dict)
+    segments: list[InlineFragmentModel] | None = None
+    range: VisibleTextRangeModel | None = None
     position: Any | None = None
     output_mode: OutputMode = "versioned"
+
+    @model_validator(mode="after")
+    def _validate_partial_formatting_inputs(self) -> "CreateObjectRequest":
+        if self.range is not None:
+            raise ValueError("create_object does not accept range.")
+        if self.segments and any(key in self.properties for key in {"text", "value"}):
+            raise ValueError("create_object accepts either properties.text/value or segments, not both.")
+        return self
 
 
 class UpdateObjectRequest(MCPModel):
     document_id: str = Field(min_length=1)
     locator: str = Field(min_length=1)
     properties: dict[str, Any] = Field(default_factory=dict)
+    segments: list[InlineFragmentModel] | None = None
+    range: VisibleTextRangeModel | None = None
     output_mode: OutputMode = "versioned"
+
+    @model_validator(mode="after")
+    def _validate_partial_formatting_inputs(self) -> "UpdateObjectRequest":
+        if self.range is not None:
+            raise ValueError("update_object does not accept range.")
+        if self.segments and any(key in self.properties for key in {"text", "value"}):
+            raise ValueError("update_object accepts either properties.text/value or segments, not both.")
+        return self
 
 
 class MoveObjectRequest(MCPModel):
@@ -414,6 +436,37 @@ class InlineStyleModel(MCPModel):
         return InlineStyle(**self.model_dump())
 
 
+class InlineFragmentModel(MCPModel):
+    text: str
+    style: InlineStyleModel | None = None
+
+    @model_validator(mode="after")
+    def _validate_text(self) -> "InlineFragmentModel":
+        if not self.text:
+            raise ValueError("segments must not contain empty text fragments.")
+        return self
+
+    def to_domain(self) -> InlineFragment:
+        return InlineFragment(
+            text=self.text,
+            style=InlineStyle() if self.style is None else self.style.to_domain(),
+        )
+
+
+class VisibleTextRangeModel(MCPModel):
+    start: int = Field(ge=0)
+    end: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def _validate_bounds(self) -> "VisibleTextRangeModel":
+        if self.end <= self.start:
+            raise ValueError("range.end must be greater than range.start.")
+        return self
+
+    def to_domain(self) -> VisibleTextRange:
+        return VisibleTextRange(start=self.start, end=self.end)
+
+
 class BlockStyleModel(MCPModel):
     alignment: str | None = None
     indent_level: int | None = None
@@ -449,6 +502,7 @@ class StyleInlineRequest(MCPModel):
     document_id: str = Field(min_length=1)
     locator: str = Field(min_length=1)
     style: InlineStyleModel
+    range: VisibleTextRangeModel | None = None
     clear_fields: list[str] = Field(default_factory=list)
     output_mode: OutputMode = "versioned"
 
