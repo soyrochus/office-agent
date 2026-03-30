@@ -5,7 +5,7 @@
 [![FOSS Pluralism](https://img.shields.io/badge/FOSS-Pluralism-purple.svg)](FOSS_PLURALISM_MANIFESTO.md)
 [![OpenSpec](https://img.shields.io/badge/OpenSpec-Used-black.svg)](https://openspec.dev/)
 
-Office-Agent (`offagent`) is a local-first Office document tool with a shared application core and a CLI entrypoint, `office-agent`.
+Office-Agent (`offagent`) is a local-first Office document tool with a shared application core and a CLI entrypoint, `offagent`.
 
 Detailed technical implementation notes are available in [technical-implementation.md](./technical-implementation.md).
 
@@ -78,13 +78,13 @@ Office-Agent supports local-first workflows for `.docx`, `.pptx`, and `.xlsx` do
 Install [the package from Pypi](https://pypi.org/project/offagent/) with:
 
 ```bash
-uv install offagent
+uv add offagent
 ```
 
 and running it straight from Pypi:
 
 ```bash
-uvx offagent
+uvx offagent --help
 ```
 
 
@@ -97,7 +97,7 @@ uv sync
 Run the CLI with:
 
 ```bash
-uv run office-agent --help
+uv run offagent --help
 ```
 
 ## Configuration
@@ -157,7 +157,7 @@ Configuration fields:
 All commands accept `--config <path>` after the command name. Example:
 
 ```bash
-uv run office-agent search "supplier shall" --config office-agent.toml
+uv run offagent search "supplier shall" --config office-agent.toml
 ```
 
 Structured commands also accept:
@@ -190,8 +190,8 @@ Options:
 - `--config <path>`: optional config file path
 
 ```bash
-uv run office-agent doctor
-uv run office-agent doctor --config office-agent.toml
+uv run offagent doctor
+uv run offagent doctor --config office-agent.toml
 ```
 
 ### Index And Reindex
@@ -208,15 +208,15 @@ Options:
 - `--config <path>`: optional config file path
 
 ```bash
-uv run office-agent index ./docs
-uv run office-agent index ./docs --with-embeddings
-uv run office-agent index ./docs/sample.docx
-uv run office-agent index ./docs/sample.pptx
-uv run office-agent index ./docs/sample.xlsx
-uv run office-agent reindex ./docs/sample.docx
-uv run office-agent reindex ./docs/sample.docx --with-embeddings
-uv run office-agent reindex ./docs/sample.pptx
-uv run office-agent reindex ./docs/sample.xlsx
+uv run offagent index ./docs
+uv run offagent index ./docs --with-embeddings
+uv run offagent index ./docs/sample.docx
+uv run offagent index ./docs/sample.pptx
+uv run offagent index ./docs/sample.xlsx
+uv run offagent reindex ./docs/sample.docx
+uv run offagent reindex ./docs/sample.docx --with-embeddings
+uv run offagent reindex ./docs/sample.pptx
+uv run offagent reindex ./docs/sample.xlsx
 ```
 
 ### Search
@@ -235,15 +235,15 @@ Options:
 - `--config <path>`: optional config file path
 
 ```bash
-uv run office-agent search "supplier shall"
-uv run office-agent search "supplier shall" --mode semantic
-uv run office-agent search "supplier shall" --mode hybrid --json
-uv run office-agent search "supplier shall" --type docx
-uv run office-agent search "supplier shall" --type pptx
-uv run office-agent search "supplier shall" --type xlsx
-uv run office-agent search "supplier shall" --type docx --doc ./docs/sample.docx
-uv run office-agent search "supplier shall" --type pptx --doc ./docs/sample.pptx
-uv run office-agent search "supplier shall" --type xlsx --doc ./docs/sample.xlsx
+uv run offagent search "supplier shall"
+uv run offagent search "supplier shall" --mode semantic
+uv run offagent search "supplier shall" --mode hybrid --json
+uv run offagent search "supplier shall" --type docx
+uv run offagent search "supplier shall" --type pptx
+uv run offagent search "supplier shall" --type xlsx
+uv run offagent search "supplier shall" --type docx --doc ./docs/sample.docx
+uv run offagent search "supplier shall" --type pptx --doc ./docs/sample.pptx
+uv run offagent search "supplier shall" --type xlsx --doc ./docs/sample.xlsx
 ```
 
 Notes:
@@ -258,8 +258,8 @@ Notes:
 Lists indexed documents with document id, path, type, modified time, and indexed item count.
 
 ```bash
-uv run office-agent list
-uv run office-agent list --json
+uv run offagent list
+uv run offagent list --json
 ```
 
 ### Show
@@ -267,9 +267,9 @@ uv run office-agent list --json
 Shows one indexed document summary, or one indexed item within that document.
 
 ```bash
-uv run office-agent show --doc ./docs/sample.docx
-uv run office-agent show --doc ./docs/sample.docx --item para:3
-uv run office-agent show --doc ./docs/sample.xlsx --item sheet:Budget2026!B12 --json
+uv run offagent show --doc ./docs/sample.docx
+uv run offagent show --doc ./docs/sample.docx --item para:3
+uv run offagent show --doc ./docs/sample.xlsx --item sheet:Budget2026!B12 --json
 ```
 
 ### Locate
@@ -293,10 +293,10 @@ Valid option combinations:
 - XLSX: `--doc` + `--sheet` + `--cell`
 
 ```bash
-uv run office-agent locate --doc ./docs/sample.docx --paragraph 3
-uv run office-agent locate --doc ./docs/sample.pptx --slide 1
-uv run office-agent locate --doc ./docs/sample.pptx --slide 1 --shape 7
-uv run office-agent locate --doc ./docs/sample.xlsx --sheet Budget2026 --cell B12
+uv run offagent locate --doc ./docs/sample.docx --paragraph 3
+uv run offagent locate --doc ./docs/sample.pptx --slide 1
+uv run offagent locate --doc ./docs/sample.pptx --slide 1 --shape 7
+uv run offagent locate --doc ./docs/sample.xlsx --sheet Budget2026 --cell B12
 ```
 
 ### Read
@@ -310,9 +310,9 @@ Options:
 - `--config <path>`: optional config file path
 
 ```bash
-uv run office-agent read --doc ./docs/sample.docx --item para:3
-uv run office-agent read --doc ./docs/sample.pptx --item slide:1:shape:7
-uv run office-agent read --doc ./docs/sample.xlsx --item sheet:Budget2026!B12
+uv run offagent read --doc ./docs/sample.docx --item para:3
+uv run offagent read --doc ./docs/sample.pptx --item slide:1:shape:7
+uv run offagent read --doc ./docs/sample.xlsx --item sheet:Budget2026!B12
 ```
 
 ### Replace
@@ -333,9 +333,9 @@ Notes:
 - XLSX uses `write-cell` instead of `replace`
 
 ```bash
-uv run office-agent replace --doc ./docs/sample.docx --item para:3 --text "Updated paragraph text."
-uv run office-agent replace --doc ./docs/sample.pptx --item slide:1:shape:7 --text "Updated slide text."
-uv run office-agent replace --doc ./docs/sample.docx --item para:3 --text "Updated paragraph text." --output-mode versioned
+uv run offagent replace --doc ./docs/sample.docx --item para:3 --text "Updated paragraph text."
+uv run offagent replace --doc ./docs/sample.pptx --item slide:1:shape:7 --text "Updated slide text."
+uv run offagent replace --doc ./docs/sample.docx --item para:3 --text "Updated paragraph text." --output-mode versioned
 ```
 
 ### Append
@@ -358,9 +358,9 @@ Notes:
 - stale-locator failures exit with code `3`
 
 ```bash
-uv run office-agent append --doc ./docs/sample.docx --item para:3 --text " Additional text."
-uv run office-agent append --doc ./docs/sample.pptx --item slide:1:shape:7 --text "\nAdditional slide text."
-uv run office-agent append --doc ./docs/sample.xlsx --item sheet:Notes!A1 --text " Additional note."
+uv run offagent append --doc ./docs/sample.docx --item para:3 --text " Additional text."
+uv run offagent append --doc ./docs/sample.pptx --item slide:1:shape:7 --text "\nAdditional slide text."
+uv run offagent append --doc ./docs/sample.xlsx --item sheet:Notes!A1 --text " Additional note."
 ```
 
 ### Write Cell
@@ -377,8 +377,8 @@ Options:
 - `--config <path>`: optional config file path
 
 ```bash
-uv run office-agent write-cell --doc ./docs/sample.xlsx --sheet Budget2026 --cell B12 --value "125000"
-uv run office-agent write-cell --doc ./docs/sample.xlsx --sheet Budget2026 --cell B12 --value "125000" --output-mode inplace
+uv run offagent write-cell --doc ./docs/sample.xlsx --sheet Budget2026 --cell B12 --value "125000"
+uv run offagent write-cell --doc ./docs/sample.xlsx --sheet Budget2026 --cell B12 --value "125000" --output-mode inplace
 ```
 
 ### MCP
@@ -390,8 +390,8 @@ Options:
 - `--config <path>`: optional config file path
 
 ```bash
-uv run office-agent mcp
-uv run office-agent mcp --config office-agent.toml
+uv run offagent mcp
+uv run offagent mcp --config office-agent.toml
 ```
 
 The MCP server exposes these tools:

@@ -1,6 +1,6 @@
 [project]
 name = "offagent"
-version = "0.10.1"
+version = "0.10.3"
 description = "Local-first Office document tooling with a shared CLI and MCP-ready core"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -24,12 +24,17 @@ dependencies = [
 Homepage = "https://github.com/soyrochus/office-agent"
 Repository = "https://github.com/soyrochus/office-agent"
 
+[[tool.uv.index]]
+name = "testpypi"
+url = "https://test.pypi.org/simple/"
+publish-url = "https://test.pypi.org/legacy/"
+explicit = true
+
 [build-system]
 requires = ["setuptools>=69"]
 build-backend = "setuptools.build_meta"
 
 [project.scripts]
-office-agent = "offagent.interfaces.cli:main"
 offagent = "offagent.interfaces.cli:main"
 
 [dependency-groups]

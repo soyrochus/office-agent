@@ -64,7 +64,8 @@ def main() -> None:
             "Typer is required to run the office-agent CLI. Install project dependencies first."
         )
 
-    build_app()(prog_name="office-agent")
+    app = build_app()
+    app()
 
 
 def build_app():
